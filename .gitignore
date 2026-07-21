@@ -1,0 +1,48 @@
+# ── Backend (Django/Python) ──────────────────────────────
+backend/venv/
+backend/.venv/
+backend/env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/db.sqlite3
+backend/staticfiles/
+backend/media/
+*.egg-info/
+.installed.cfg
+*.egg
+instance/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Frontend (Next.js/Node) ───────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.turbo/
+
+# ── Editors / OS ──────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ── Misc ──────────────────────────────────────────────────
+*.log
+.env
+.env.*
+!.env.example
