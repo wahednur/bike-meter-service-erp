@@ -16,6 +16,7 @@ class ExpenseBreakdownSerializer(serializers.Serializer):
     product_restocks = serializers.DecimalField(max_digits=14, decimal_places=2)
     asset_purchases = serializers.DecimalField(max_digits=14, decimal_places=2)
     device_purchases = serializers.DecimalField(max_digits=14, decimal_places=2)
+    other_expenses = serializers.DecimalField(max_digits=14, decimal_places=2)
 
 
 class ExpenseReportRowSerializer(serializers.Serializer):
@@ -104,6 +105,47 @@ class DueReportSerializer(serializers.Serializer):
     total_due = serializers.DecimalField(max_digits=14, decimal_places=2)
 
 
+class TopCustomerRowSerializer(serializers.Serializer):
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    invoice_count = serializers.IntegerField()
+    total_billed_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    total_paid_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    total_due_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class TopCustomersReportSerializer(serializers.Serializer):
+    rows = TopCustomerRowSerializer(many=True)
+    customer_count = serializers.IntegerField()
+    sort_by = serializers.CharField()
+
+
+class PaymentDelayRowSerializer(serializers.Serializer):
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    invoice_nos = serializers.ListField(child=serializers.CharField())
+    days_delayed = serializers.IntegerField()
+    amount_due = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class PaymentDelayReportSerializer(serializers.Serializer):
+    rows = PaymentDelayRowSerializer(many=True)
+    customer_count = serializers.IntegerField()
+
+
+class ServicePerformanceRowSerializer(serializers.Serializer):
+    service_id = serializers.IntegerField()
+    service_name = serializers.CharField()
+    times_performed = serializers.IntegerField()
+    total_revenue = serializers.DecimalField(max_digits=14, decimal_places=2)
+    average_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class ServicePerformanceReportSerializer(serializers.Serializer):
+    rows = ServicePerformanceRowSerializer(many=True)
+    service_count = serializers.IntegerField()
+
+
 class CashbookEntrySerializer(serializers.Serializer):
     date = serializers.DateField()
     direction = serializers.CharField()
@@ -157,6 +199,9 @@ class UpcomingInstallmentSerializer(serializers.Serializer):
 class AdminDashboardSummarySerializer(serializers.Serializer):
     date = serializers.DateField()
     today_income = serializers.DecimalField(max_digits=14, decimal_places=2)
+    today_invoice_count = serializers.IntegerField()
+    today_total_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    total_income_all_time = serializers.DecimalField(max_digits=14, decimal_places=2)
     pending_dues = PendingDuesSerializer()
     red_listed_customers_count = serializers.IntegerField()
     low_stock_products = LowStockProductSerializer(many=True)

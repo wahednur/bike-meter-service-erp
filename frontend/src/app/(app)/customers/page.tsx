@@ -1,11 +1,14 @@
 "use client";
 
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Upload, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { CustomerFormDialog } from "@/components/customer-form-dialog";
+import { CustomerImportDialog } from "@/components/customer-import-dialog";
+import { EmptyState } from "@/components/empty-state";
 import { ListPagination } from "@/components/list-pagination";
+import { RowActions } from "@/components/row-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +22,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { usePaginatedList } from "@/hooks/use-paginated-list";
-import { ApiError, listCustomers } from "@/lib/api";
+import { deleteCustomer, listCustomers } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 import type { Customer } from "@/lib/types";
 
 function matchesQuery(customer: Customer, query: string) {
@@ -33,12 +37,13 @@ function matchesQuery(customer: Customer, query: string) {
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
 
   const loadCustomers = useCallback(() => {
     listCustomers()
       .then(setCustomers)
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Failed to load customers.");
+        setError(reportError(err, "Failed to load customers."));
       });
   }, []);
 
@@ -53,19 +58,29 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Customers</h1>
           <p className="text-sm text-muted-foreground">Browse, search, and manage customer records.</p>
         </div>
-        <CustomerFormDialog
-          trigger={
-            <Button type="button">
-              <Plus /> Add Customer
-            </Button>
-          }
-          onSaved={loadCustomers}
-        />
+        <div className="flex gap-2">
+          <CustomerImportDialog
+            trigger={
+              <Button type="button" variant="outline">
+                <Upload /> Import Customers
+              </Button>
+            }
+            onImported={loadCustomers}
+          />
+          <CustomerFormDialog
+            trigger={
+              <Button type="button">
+                <Plus /> Add Customer
+              </Button>
+            }
+            onSaved={loadCustomers}
+          />
+        </div>
       </div>
 
       <div className="relative max-w-sm">
@@ -83,7 +98,21 @@ export default function CustomersPage() {
       {!customers && !error ? (
         <Skeleton className="h-64 w-full" />
       ) : customers && customers.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No customers yet.</p>
+        <EmptyState
+          icon={Users}
+          title="No customers yet"
+          description="Add your first customer to get started."
+          action={
+            <CustomerFormDialog
+              trigger={
+                <Button type="button" variant="outline">
+                  <Plus /> Add Customer
+                </Button>
+              }
+              onSaved={loadCustomers}
+            />
+          }
+        />
       ) : (
         <>
           <div className="rounded-lg border">
@@ -94,12 +123,13 @@ export default function CustomersPage() {
                   <TableHead>Phone</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-12" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pageItems.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">
                       No customers match your search.
                     </TableCell>
                   </TableRow>
@@ -130,6 +160,17 @@ export default function CustomersPage() {
                           )}
                         </Link>
                       </TableCell>
+                      <TableCell>
+                        <RowActions
+                          resourceLabel="Customer"
+                          onEdit={() => setEditingCustomer(customer)}
+                          onDelete={() =>
+                            deleteCustomer(customer.id).then(() =>
+                              setCustomers((prev) => prev?.filter((item) => item.id !== customer.id) ?? prev),
+                            )
+                          }
+                        />
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -139,6 +180,15 @@ export default function CustomersPage() {
           <ListPagination page={page} totalPages={totalPages} totalCount={totalCount} onPageChange={setPage} />
         </>
       )}
+
+      <CustomerFormDialog
+        customer={editingCustomer ?? undefined}
+        open={editingCustomer !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setEditingCustomer(null);
+        }}
+        onSaved={loadCustomers}
+      />
     </div>
   );
 }

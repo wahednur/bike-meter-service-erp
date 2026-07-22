@@ -6,7 +6,8 @@ import { Area, AreaChart, CartesianGrid, XAxis } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, getIncomeReport } from "@/lib/api";
+import { getIncomeReport } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 
 const chartConfig = {
   income: {
@@ -71,7 +72,7 @@ export function IncomeTrendChart() {
       })
       .catch((err: unknown) => {
         if (!isMounted) return;
-        setError(err instanceof ApiError ? err.message : "Failed to load the income trend.");
+        setError(reportError(err, "Failed to load the income trend."));
       });
 
     return () => {

@@ -61,6 +61,8 @@ INSTALLED_APPS = [
     'apps.ecommerce',
     'apps.audit',
     'apps.notifications',
+    'apps.expenses',
+    'apps.shop_profile',
 ]
 
 MIDDLEWARE = [

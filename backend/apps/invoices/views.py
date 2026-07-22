@@ -6,30 +6,42 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.permissions import IsAdminOrHasModelPermission
+from apps.accounts.permissions import IsAdmin, IsAdminOrHasModelPermission
+from apps.audit.services import log_action
 from apps.invoices import services as invoice_services
 from apps.invoices.exceptions import InvoiceError
-from apps.invoices.models import Invoice
+from apps.invoices.models import Invoice, InvoicePayment, InvoiceProductLine, InvoiceServiceLine
 from apps.invoices.serializers import (
     AddMeterEntryInputSerializer,
     AddPaymentInputSerializer,
     AddProductLineInputSerializer,
     AddServiceLineInputSerializer,
+    ApplyDiscountInputSerializer,
     InvoiceDetailSerializer,
     InvoiceMeterEntrySerializer,
     InvoicePaymentSerializer,
     InvoiceProductLineSerializer,
     InvoiceSerializer,
     InvoiceServiceLineSerializer,
+    PublicInvoiceDetailSerializer,
     StartInvoiceInputSerializer,
+    UpdateProductLineInputSerializer,
+    UpdateServiceLineInputSerializer,
 )
 
 
-class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    """Read-only for the base resource - invoices are never created or
-    edited via raw POST/PUT/PATCH on /invoices/. Every mutation goes
-    through a dedicated action below, which calls the service layer so
-    rules (a)-(f) are always enforced."""
+class InvoiceViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Read-only for create/update on the base resource - invoices are never
+    created or edited via raw POST/PUT/PATCH on /invoices/. Every mutation
+    goes through a dedicated action below, which calls the service layer so
+    rules (a)-(f) are always enforced. DELETE is allowed (soft delete only,
+    see BaseModel.delete()), same restriction as cancel: a fully paid
+    invoice is a settled financial record and cannot be removed."""
 
     queryset = Invoice.objects.select_related("customer").all()
     permission_classes = [IsAdminOrHasModelPermission]
@@ -38,6 +50,12 @@ class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
         if self.action == "retrieve":
             return InvoiceDetailSerializer
         return InvoiceSerializer
+
+    def perform_destroy(self, instance):
+        if instance.status == Invoice.Status.PAID:
+            raise ValidationError("A fully paid invoice cannot be deleted.")
+        instance.delete()  # soft delete, see BaseModel.delete()
+        log_action(instance, "invoice_deleted", "Invoice deleted.", user=self.request.user)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -75,6 +93,12 @@ class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
 
     @action(detail=True, methods=["post"], url_path="meter-entries")
     def add_meter_entry(self, request, pk=None):
+        """Kept for backward compatibility and internal use (the merged
+        add_service_line() below calls the same service function directly
+        for a Mileage Correction service). Not an intended frontend entry
+        point going forward - new work should go through POST
+        .../service-lines/, which creates the InvoiceMeterEntry and the
+        InvoiceServiceLine together in one call."""
         invoice = self.get_object()
         serializer = AddMeterEntryInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -86,6 +110,11 @@ class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
 
     @action(detail=True, methods=["post"], url_path="service-lines")
     def add_service_line(self, request, pk=None):
+        """The merged endpoint: for a Mileage Correction service, pass
+        `meter` + serial_number/condition_note/previous_km/current_km/
+        mileage_correction_device instead of a pre-existing `meter_entry`,
+        and this creates both records together. See
+        AddServiceLineInputSerializer's docstring for the full shape."""
         invoice = self.get_object()
         serializer = AddServiceLineInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -94,6 +123,33 @@ class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
         except InvoiceError as exc:
             raise ValidationError(str(exc))
         return Response(InvoiceServiceLineSerializer(line).data, status=201)
+
+    def update_service_line(self, request, pk=None, line_pk=None):
+        """PATCH /api/invoices/{pk}/service-lines/{line_pk}/ - not a DRF
+        @action (needs a second id in the URL, which the @action/router
+        machinery doesn't support), so it's wired up directly in urls.py
+        via InvoiceViewSet.as_view({...})."""
+        invoice = self.get_object()
+        line = get_object_or_404(InvoiceServiceLine, pk=line_pk, invoice=invoice)
+        serializer = UpdateServiceLineInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            invoice_services.update_service_line(invoice, line, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        line.refresh_from_db()
+        return Response(InvoiceServiceLineSerializer(line).data)
+
+    def destroy_service_line(self, request, pk=None, line_pk=None):
+        """DELETE /api/invoices/{pk}/service-lines/{line_pk}/ - see
+        update_service_line() above for why this isn't a DRF @action."""
+        invoice = self.get_object()
+        line = get_object_or_404(InvoiceServiceLine, pk=line_pk, invoice=invoice)
+        try:
+            invoice_services.delete_service_line(invoice, line, user=request.user)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        return Response(status=204)
 
     @action(detail=True, methods=["post"], url_path="product-lines")
     def add_product_line(self, request, pk=None):
@@ -105,6 +161,31 @@ class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
         except InvoiceError as exc:
             raise ValidationError(str(exc))
         return Response(InvoiceProductLineSerializer(line).data, status=201)
+
+    def update_product_line(self, request, pk=None, line_pk=None):
+        """PATCH /api/invoices/{pk}/product-lines/{line_pk}/ - see
+        update_service_line() above for why this isn't a DRF @action."""
+        invoice = self.get_object()
+        line = get_object_or_404(InvoiceProductLine, pk=line_pk, invoice=invoice)
+        serializer = UpdateProductLineInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            invoice_services.update_product_line(invoice, line, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        line.refresh_from_db()
+        return Response(InvoiceProductLineSerializer(line).data)
+
+    def destroy_product_line(self, request, pk=None, line_pk=None):
+        """DELETE /api/invoices/{pk}/product-lines/{line_pk}/ - see
+        update_service_line() above for why this isn't a DRF @action."""
+        invoice = self.get_object()
+        line = get_object_or_404(InvoiceProductLine, pk=line_pk, invoice=invoice)
+        try:
+            invoice_services.delete_product_line(invoice, line, user=request.user)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        return Response(status=204)
 
     @action(detail=True, methods=["post"])
     def payments(self, request, pk=None):
@@ -126,6 +207,49 @@ class InvoiceViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
             raise ValidationError(str(exc))
         return Response(InvoiceDetailSerializer(invoice).data)
 
+    @action(detail=True, methods=["post"], permission_classes=[IsAdmin])
+    def discount(self, request, pk=None):
+        """Apply or update the invoice's fixed-BDT discount. Admin only -
+        Staff cannot give discounts, since this affects revenue directly."""
+        invoice = self.get_object()
+        serializer = ApplyDiscountInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            invoice_services.apply_discount(invoice, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        return Response(InvoiceDetailSerializer(invoice).data)
+
+
+class PaymentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """GET /api/payments/ - every InvoicePayment across every invoice, for a
+    general "Payments" page. Read-only: new payments are still only ever
+    recorded via POST /api/invoices/{id}/payments/, since that's what
+    enforces the overpayment guard and triggers the per-meter split/red-list
+    recalculation - this view exists purely to look across invoices."""
+
+    queryset = InvoicePayment.objects.select_related("invoice", "invoice__customer").all()
+    serializer_class = InvoicePaymentSerializer
+    permission_classes = [IsAdminOrHasModelPermission]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+
+        customer_id = params.get("customer")
+        if customer_id:
+            qs = qs.filter(invoice__customer_id=customer_id)
+
+        date_from = params.get("date_from")
+        if date_from:
+            qs = qs.filter(payment_date__date__gte=date_from)
+
+        date_to = params.get("date_to")
+        if date_to:
+            qs = qs.filter(payment_date__date__lte=date_to)
+
+        return qs.order_by("-payment_date")
+
 
 class PublicInvoiceView(APIView):
     """GET /api/public/invoices/<token>/ - read-only, no auth. This is the
@@ -135,4 +259,4 @@ class PublicInvoiceView(APIView):
 
     def get(self, request, token):
         invoice = get_object_or_404(Invoice, public_share_token=token)
-        return Response(InvoiceDetailSerializer(invoice).data)
+        return Response(PublicInvoiceDetailSerializer(invoice).data)

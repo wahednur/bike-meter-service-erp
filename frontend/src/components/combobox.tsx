@@ -15,16 +15,16 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-export interface ComboboxOption {
-  value: number;
+export interface ComboboxOption<T extends string | number = number> {
+  value: T;
   label: string;
   description?: string;
 }
 
-interface ComboboxProps {
-  options: ComboboxOption[];
-  value: number | null;
-  onChange: (value: number | null) => void;
+interface ComboboxProps<T extends string | number = number> {
+  options: ComboboxOption<T>[];
+  value: T | null;
+  onChange: (value: T | null) => void;
   placeholder?: string;
   disabled?: boolean;
   /** Shows a "— None —" row for optional fields (e.g. mileage correction
@@ -34,7 +34,7 @@ interface ComboboxProps {
   searchPlaceholder?: string;
 }
 
-export function Combobox({
+export function Combobox<T extends string | number = number>({
   options,
   value,
   onChange,
@@ -43,7 +43,7 @@ export function Combobox({
   allowClear = false,
   emptyMessage = "No results found.",
   searchPlaceholder = "Search...",
-}: ComboboxProps) {
+}: ComboboxProps<T>) {
   const [open, setOpen] = useState(false);
   const selected = options.find((option) => option.value === value) ?? null;
 

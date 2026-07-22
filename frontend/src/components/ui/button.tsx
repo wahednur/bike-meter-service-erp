@@ -9,7 +9,14 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // Hardcoded to text-white rather than text-primary-foreground: this
+        // theme's .dark block defines --primary-foreground darker than
+        // --primary itself (a broken/inverted pair), which washes out every
+        // solid-color button's label in dark mode. White reads correctly
+        // against --primary in both themes (light's --primary-foreground is
+        // already near-white), so this is a safe, deliberate override - not
+        // a workaround to revisit once the token itself is fixed upstream.
+        default: "bg-primary text-white hover:bg-primary/80",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

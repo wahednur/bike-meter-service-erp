@@ -51,11 +51,10 @@ class ServiceSerializer(serializers.ModelSerializer):
 
 
 class ServiceListSerializer(ServiceSerializer):
-    """Used for the list endpoint - adds per-service sales stats.
-
-    These are hardcoded to 0 until the Invoice app exists to actually track
-    how many times each service has been sold.
-    """
+    """Used for the list endpoint - adds per-service, all-time sales stats
+    (every InvoiceServiceLine ever billed for this service). See
+    apps.reports.services.service_performance_report for the date-range-
+    filterable, ranked version of the same numbers."""
 
     total_service_quantity = serializers.SerializerMethodField()
     total_sale_price = serializers.SerializerMethodField()
@@ -67,10 +66,15 @@ class ServiceListSerializer(ServiceSerializer):
         ]
 
     def get_total_service_quantity(self, obj):
-        return 0
+        return obj.invoice_lines.count()
 
     def get_total_sale_price(self, obj):
-        return 0
+        from django.db.models import Sum
+
+        return obj.invoice_lines.aggregate(total=Sum("price_charged"))["total"] or 0
 
     def get_average_sale_price(self, obj):
-        return 0
+        quantity = self.get_total_service_quantity(obj)
+        if not quantity:
+            return 0
+        return self.get_total_sale_price(obj) / quantity

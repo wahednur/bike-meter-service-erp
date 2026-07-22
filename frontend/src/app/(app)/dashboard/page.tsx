@@ -1,25 +1,72 @@
 "use client";
 
+import {
+  AlertTriangle,
+  CalendarClock,
+  FileText,
+  PackageX,
+  PiggyBank,
+  UserX,
+  Wallet,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
+import { EmptyState } from "@/components/empty-state";
 import { IncomeTrendChart } from "@/components/income-trend-chart";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, getAdminDashboard } from "@/lib/api";
 import type { AdminDashboardSummary } from "@/lib/types";
 
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+// Cycled across --chart-1..5 - with 8 stat cards and only 5 theme accent
+// colors, a couple of cards repeat a color, but no two adjacent cards share
+// one, which is enough to make each block visually distinct at a glance.
+//
+// Applied via inline style (not Tailwind arbitrary-value classes) on
+// purpose: Tailwind's build-time scanner only generates CSS for utility
+// classes it finds as complete, literal strings in the source, and even a
+// fully-spelled-out class list here would depend on `bg-[var(--chart-1)]/15`
+// -style opacity-modifier-on-a-CSS-variable being supported, which this
+// project's Tailwind v4 setup does not resolve. Inline style sidesteps both
+// problems and renders identically in both themes since it reads the same
+// CSS custom properties globals.css already defines per theme.
+function accentColor(index: number): string {
+  return `var(--chart-${(index % 5) + 1})`;
+}
+
+function StatCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  accentIndex,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  icon: LucideIcon;
+  accentIndex: number;
+}) {
+  const color = accentColor(accentIndex);
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          {label}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-semibold">{value}</p>
-        {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+    <Card className="border-l-4" style={{ borderLeftColor: color }}>
+      <CardContent className="flex items-start gap-3">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: `color-mix(in oklab, ${color} 18%, transparent)`, color }}
+        >
+          <Icon className="h-4.5 w-4.5" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
+          <p className="text-xl font-semibold">{value}</p>
+          {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+        </div>
       </CardContent>
     </Card>
   );
@@ -32,9 +79,9 @@ function DashboardSkeleton() {
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-4 w-24" />
       </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, index) => (
-          <Skeleton key={index} className="h-24 w-full" />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 8 }).map((_, index) => (
+          <Skeleton key={index} className="h-20 w-full" />
         ))}
       </div>
       <Skeleton className="h-80 w-full" />
@@ -55,13 +102,14 @@ function DashboardContent() {
       })
       .catch((err: unknown) => {
         if (!isMounted) return;
-        if (err instanceof ApiError && err.status === 403) {
-          setError("This dashboard is Admin-only. Log in with an Admin account to view it.");
-        } else if (err instanceof ApiError) {
-          setError(err.message);
-        } else {
-          setError("Failed to load the dashboard.");
-        }
+        const message =
+          err instanceof ApiError && err.status === 403
+            ? "This dashboard is Admin-only. Log in with an Admin account to view it."
+            : err instanceof ApiError
+              ? err.message
+              : "Failed to load the dashboard.";
+        toast.error(message);
+        setError(message);
       })
       .finally(() => {
         if (isMounted) setIsLoading(false);
@@ -84,23 +132,52 @@ function DashboardContent() {
         <p className="text-sm text-muted-foreground">{data.date}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        <StatCard label="Today's Income" value={`৳${data.today_income}`} />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        <StatCard label="Today's Income" value={`৳${data.today_income}`} icon={Wallet} accentIndex={0} />
         <StatCard
           label="Pending Dues"
           value={`৳${data.pending_dues.total_due}`}
           hint={`${data.pending_dues.invoice_count} invoice(s)`}
+          icon={AlertTriangle}
+          accentIndex={1}
         />
-        <StatCard label="Red-Listed Customers" value={String(data.red_listed_customers_count)} />
+        <StatCard
+          label="Red-Listed Customers"
+          value={String(data.red_listed_customers_count)}
+          icon={UserX}
+          accentIndex={2}
+        />
         <StatCard
           label="Low-Stock Products"
           value={String(data.low_stock_products.length)}
           hint={`≤ ${data.low_stock_threshold} units`}
+          icon={PackageX}
+          accentIndex={3}
         />
         <StatCard
           label="Upcoming Installments"
           value={String(data.upcoming_loan_installments.length)}
           hint={`next ${data.upcoming_days} days`}
+          icon={CalendarClock}
+          accentIndex={4}
+        />
+        <StatCard
+          label="Today's Invoices Created"
+          value={String(data.today_invoice_count)}
+          icon={FileText}
+          accentIndex={0}
+        />
+        <StatCard
+          label="Today's Total Work Value"
+          value={`৳${data.today_total_amount}`}
+          icon={Wrench}
+          accentIndex={1}
+        />
+        <StatCard
+          label="Total Income (All Time)"
+          value={`৳${data.total_income_all_time}`}
+          icon={PiggyBank}
+          accentIndex={2}
         />
       </div>
 
@@ -112,7 +189,7 @@ function DashboardContent() {
           <span className="font-normal text-muted-foreground">(&le; {data.low_stock_threshold} units)</span>
         </h2>
         {data.low_stock_products.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing low on stock.</p>
+          <EmptyState icon={PackageX} title="Nothing low on stock" />
         ) : (
           <Card className="py-0">
             <ul className="divide-y">
@@ -135,7 +212,7 @@ function DashboardContent() {
           <span className="font-normal text-muted-foreground">(next {data.upcoming_days} days)</span>
         </h2>
         {data.upcoming_loan_installments.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing due soon.</p>
+          <EmptyState icon={CalendarClock} title="Nothing due soon" />
         ) : (
           <Card className="py-0">
             <ul className="divide-y">

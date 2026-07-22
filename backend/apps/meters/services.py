@@ -1,6 +1,35 @@
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Count, Max, Sum
+
+
+def compute_meter_service_stats(meter):
+    """Real per-meter service history: every InvoiceServiceLine tied to a
+    meter entry for this meter, aggregated for totals plus a per-service
+    breakdown. Mirrors compute_mileage_correction_device_stats() below.
+    """
+    from apps.invoices.models import InvoiceServiceLine
+
+    lines = InvoiceServiceLine.objects.filter(meter_entry__meter=meter)
+    total_services_count = lines.count()
+    total_revenue = lines.aggregate(total=Sum("price_charged"))["total"] or Decimal("0")
+    last_service_date = lines.aggregate(latest=Max("meter_entry__service_date"))["latest"]
+
+    breakdown = (
+        lines.values("service__name")
+        .annotate(count=Count("id"), revenue=Sum("price_charged"))
+        .order_by("-count")
+    )
+
+    return {
+        "total_services_count": total_services_count,
+        "total_revenue": total_revenue,
+        "last_service_date": last_service_date,
+        "service_breakdown": [
+            {"service_name": row["service__name"], "count": row["count"], "revenue": row["revenue"]}
+            for row in breakdown
+        ],
+    }
 
 
 def compute_mileage_correction_device_stats(device):

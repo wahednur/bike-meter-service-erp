@@ -22,6 +22,7 @@ from django.urls import include, path
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('apps.accounts.urls')),
+    path('api/', include('apps.audit.urls')),
     path('api/', include('apps.customers.urls')),
     path('api/', include('apps.suppliers.urls')),
     path('api/', include('apps.meters.urls')),
@@ -33,6 +34,8 @@ urlpatterns = [
     path('api/', include('apps.reports.urls')),
     path('api/', include('apps.notifications.urls')),
     path('api/', include('apps.ecommerce.urls')),
+    path('api/', include('apps.expenses.urls')),
+    path('api/', include('apps.shop_profile.urls')),
 ]
 
 if settings.DEBUG:

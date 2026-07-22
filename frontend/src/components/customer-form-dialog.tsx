@@ -15,23 +15,32 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, createCustomer, updateCustomer } from "@/lib/api";
+import { Textarea } from "@/components/ui/textarea";
+import { createCustomer, updateCustomer } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 import type { Customer, CustomerPayload } from "@/lib/types";
 
 export function CustomerFormDialog({
   customer,
   trigger,
+  open: openProp,
+  onOpenChange: onOpenChangeProp,
   onSaved,
 }: {
   customer?: Customer;
-  trigger: ReactNode;
+  trigger?: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onSaved: (customer: Customer) => void;
 }) {
   const isEdit = !!customer;
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp ?? internalOpen;
+  const setOpen = onOpenChangeProp ?? setInternalOpen;
   const [name, setName] = useState(customer?.name ?? "");
   const [phone, setPhone] = useState(customer?.phone ?? "");
   const [address, setAddress] = useState(customer?.address ?? "");
+  const [description, setDescription] = useState(customer?.description ?? "");
   const [email, setEmail] = useState(customer?.email ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +50,7 @@ export function CustomerFormDialog({
     setName(customer?.name ?? "");
     setPhone(customer?.phone ?? "");
     setAddress(customer?.address ?? "");
+    setDescription(customer?.description ?? "");
     setEmail(customer?.email ?? "");
     setError(null);
   }, [open, customer]);
@@ -55,6 +65,7 @@ export function CustomerFormDialog({
         name: name.trim(),
         phone: phone.trim(),
         address: address.trim(),
+        description: description.trim(),
         email: email.trim() || null,
       };
       const saved = customer ? await updateCustomer(customer.id, payload) : await createCustomer(payload);
@@ -62,7 +73,7 @@ export function CustomerFormDialog({
       setOpen(false);
       onSaved(saved);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to save the customer.");
+      setError(reportError(err, "Failed to save the customer."));
     } finally {
       setIsSubmitting(false);
     }
@@ -70,7 +81,7 @@ export function CustomerFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit customer" : "Add customer"}</DialogTitle>
@@ -102,6 +113,14 @@ export function CustomerFormDialog({
               type="email"
               value={email ?? ""}
               onChange={(event) => setEmail(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="customer-description">Description</Label>
+            <Textarea
+              id="customer-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
             />
           </div>
           {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}

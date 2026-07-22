@@ -27,6 +27,7 @@ class Meter(BaseModel):
     ic_mcu_model = models.CharField(max_length=100)
     sales_price = models.DecimalField(max_digits=10, decimal_places=2)
     image = models.ImageField(upload_to="meters/", null=True, blank=True)
+    description = models.TextField(blank=True)
 
     class Meta:
         ordering = ["brand", "model"]

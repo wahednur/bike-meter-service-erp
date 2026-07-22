@@ -1,10 +1,12 @@
 "use client";
 
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Truck } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { EmptyState } from "@/components/empty-state";
 import { ListPagination } from "@/components/list-pagination";
+import { RowActions } from "@/components/row-actions";
 import { SupplierFormDialog } from "@/components/supplier-form-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +20,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { usePaginatedList } from "@/hooks/use-paginated-list";
-import { ApiError, listSuppliers } from "@/lib/api";
+import { deleteSupplier, listSuppliers } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 import type { Supplier } from "@/lib/types";
 
 function matchesQuery(supplier: Supplier, query: string) {
@@ -28,12 +31,13 @@ function matchesQuery(supplier: Supplier, query: string) {
 export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
 
   const loadSuppliers = useCallback(() => {
     listSuppliers()
       .then(setSuppliers)
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Failed to load suppliers.");
+        setError(reportError(err, "Failed to load suppliers."));
       });
   }, []);
 
@@ -48,7 +52,7 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Suppliers</h1>
           <p className="text-sm text-muted-foreground">Browse, search, and manage supplier records.</p>
@@ -78,7 +82,21 @@ export default function SuppliersPage() {
       {!suppliers && !error ? (
         <Skeleton className="h-64 w-full" />
       ) : suppliers && suppliers.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No suppliers yet.</p>
+        <EmptyState
+          icon={Truck}
+          title="No suppliers yet"
+          description="Add your first supplier to get started."
+          action={
+            <SupplierFormDialog
+              trigger={
+                <Button type="button" variant="outline">
+                  <Plus /> Add Supplier
+                </Button>
+              }
+              onSaved={loadSuppliers}
+            />
+          }
+        />
       ) : (
         <>
           <div className="rounded-lg border">
@@ -89,12 +107,13 @@ export default function SuppliersPage() {
                   <TableHead>Phone</TableHead>
                   <TableHead>Address</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead className="w-12" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pageItems.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">
                       No suppliers match your search.
                     </TableCell>
                   </TableRow>
@@ -124,6 +143,17 @@ export default function SuppliersPage() {
                           {supplier.note || "—"}
                         </Link>
                       </TableCell>
+                      <TableCell>
+                        <RowActions
+                          resourceLabel="Supplier"
+                          onEdit={() => setEditingSupplier(supplier)}
+                          onDelete={() =>
+                            deleteSupplier(supplier.id).then(() =>
+                              setSuppliers((prev) => prev?.filter((item) => item.id !== supplier.id) ?? prev),
+                            )
+                          }
+                        />
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -133,6 +163,15 @@ export default function SuppliersPage() {
           <ListPagination page={page} totalPages={totalPages} totalCount={totalCount} onPageChange={setPage} />
         </>
       )}
+
+      <SupplierFormDialog
+        supplier={editingSupplier ?? undefined}
+        open={editingSupplier !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setEditingSupplier(null);
+        }}
+        onSaved={loadSuppliers}
+      />
     </div>
   );
 }

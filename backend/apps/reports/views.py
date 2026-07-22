@@ -16,10 +16,13 @@ from apps.reports.serializers import (
     DueReportSerializer,
     ExpenseReportSerializer,
     IncomeReportSerializer,
+    PaymentDelayReportSerializer,
     ProfitLossReportSerializer,
     PurchaseReportSerializer,
     SalesReportSerializer,
+    ServicePerformanceReportSerializer,
     StockReportSerializer,
+    TopCustomersReportSerializer,
 )
 from apps.reports.utils import get_date_range
 from apps.suppliers import services as supplier_services
@@ -90,6 +93,31 @@ class DueReportView(BaseReportView):
         from_date, to_date = get_date_range(request)
         data = report_services.due_report(from_date, to_date)
         return Response(DueReportSerializer(data).data)
+
+
+class TopCustomersReportView(BaseReportView):
+    def get(self, request):
+        from_date, to_date = get_date_range(request)
+        sort_by = request.query_params.get("sort_by", "total_billed_amount")
+        try:
+            data = report_services.top_customers_report(from_date, to_date, sort_by=sort_by)
+        except ReportError as exc:
+            raise ValidationError(str(exc))
+        return Response(TopCustomersReportSerializer(data).data)
+
+
+class PaymentDelayReportView(BaseReportView):
+    def get(self, request):
+        from_date, to_date = get_date_range(request)
+        data = report_services.payment_delay_report(from_date, to_date)
+        return Response(PaymentDelayReportSerializer(data).data)
+
+
+class ServicePerformanceReportView(BaseReportView):
+    def get(self, request):
+        from_date, to_date = get_date_range(request)
+        data = report_services.service_performance_report(from_date, to_date)
+        return Response(ServicePerformanceReportSerializer(data).data)
 
 
 class CashbookReportView(BaseReportView):

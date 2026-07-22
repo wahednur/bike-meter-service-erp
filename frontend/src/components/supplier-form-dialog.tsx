@@ -16,20 +16,27 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, createSupplier, updateSupplier } from "@/lib/api";
+import { createSupplier, updateSupplier } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 import type { Supplier, SupplierPayload } from "@/lib/types";
 
 export function SupplierFormDialog({
   supplier,
   trigger,
+  open: openProp,
+  onOpenChange: onOpenChangeProp,
   onSaved,
 }: {
   supplier?: Supplier;
-  trigger: ReactNode;
+  trigger?: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onSaved: (supplier: Supplier) => void;
 }) {
   const isEdit = !!supplier;
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp ?? internalOpen;
+  const setOpen = onOpenChangeProp ?? setInternalOpen;
   const [name, setName] = useState(supplier?.name ?? "");
   const [phone, setPhone] = useState(supplier?.phone ?? "");
   const [address, setAddress] = useState(supplier?.address ?? "");
@@ -63,7 +70,7 @@ export function SupplierFormDialog({
       setOpen(false);
       onSaved(saved);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to save the supplier.");
+      setError(reportError(err, "Failed to save the supplier."));
     } finally {
       setIsSubmitting(false);
     }
@@ -71,7 +78,7 @@ export function SupplierFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit supplier" : "Add supplier"}</DialogTitle>

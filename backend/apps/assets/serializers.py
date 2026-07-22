@@ -8,7 +8,7 @@ class AssetSerializer(serializers.ModelSerializer):
         model = Asset
         fields = [
             "id", "name", "purchase_price", "purchase_date", "supplier",
-            "has_warranty", "warranty_note",
+            "has_warranty", "warranty_note", "description",
             "created_at", "updated_at", "created_by",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by"]
@@ -32,6 +32,8 @@ class CostRecoveryReportItemSerializer(serializers.Serializer):
     total_incident_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
     total_cost_incurred = serializers.DecimalField(max_digits=12, decimal_places=2)
     total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_jobs_count = serializers.IntegerField()
+    has_usage = serializers.BooleanField()
     profit_loss = serializers.DecimalField(max_digits=12, decimal_places=2)
     status = serializers.CharField()
     cost_recovered = serializers.BooleanField()

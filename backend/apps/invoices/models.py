@@ -2,6 +2,7 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
 from django.utils import timezone
 
+from apps.assets.models import Asset
 from apps.common.models import BaseModel
 from apps.customers.models import Customer
 from apps.meters.models import MileageCorrectionDevice, Meter
@@ -28,6 +29,12 @@ class Invoice(BaseModel):
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
     created_date = models.DateField(auto_now_add=True)
     public_share_token = models.CharField(max_length=16, unique=True, editable=False)
+
+    # Fixed BDT amount (never a percentage), applied at the invoice level -
+    # not per line item. Admin-only, see apps.invoices.services.apply_discount().
+    # total_amount is computed as (services + products) - discount_amount.
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, editable=False)
+    discount_note = models.TextField(blank=True, editable=False)
 
     # Sticky flag: set True the first time this invoice is ever seen in
     # PARTIAL status (i.e. some meter/service on it received less than its
@@ -108,6 +115,14 @@ class InvoiceServiceLine(BaseModel):
     )
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name="invoice_lines")
     price_charged = models.DecimalField(max_digits=10, decimal_places=2)
+
+    # Opt-in: which shop tool/accessory (e.g. a soldering iron) was used to
+    # perform this repair, if the shop owner bothered to tag it. Not every
+    # service names one - see apps.assets.services.compute_asset_stats(),
+    # which treats zero tagged lines as "not yet linked", not "worthless".
+    asset_used = models.ForeignKey(
+        Asset, on_delete=models.PROTECT, null=True, blank=True, related_name="invoice_service_lines",
+    )
 
     class Meta:
         ordering = ["created_at"]

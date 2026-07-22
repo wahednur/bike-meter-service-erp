@@ -1,8 +1,11 @@
 from datetime import date
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
+from rest_framework.test import APIClient
 
+from apps.assets.models import Asset
 from apps.customers.models import Customer
 from apps.invoices import services as invoice_services
 from apps.invoices.exceptions import InvoiceError
@@ -10,7 +13,10 @@ from apps.invoices.models import Invoice
 from apps.meters.models import MileageCorrectionDevice, Meter
 from apps.products.models import Product
 from apps.services.models import Service, ServiceCategory
+from apps.shop_profile.models import ShopProfile
 from apps.suppliers.models import Supplier
+
+User = get_user_model()
 
 
 class InvoiceServiceTests(TestCase):
@@ -325,4 +331,767 @@ class InvoiceServiceTests(TestCase):
         self.assertEqual(
             actions,
             ["invoice_created", "meter_entry_added", "service_line_added", "payment_added"],
+        )
+
+
+class PublicInvoiceViewTests(TestCase):
+    """HTTP-level: the no-auth share link must hide the mileage correction
+    device entirely and carry shop branding for the footer."""
+
+    def setUp(self):
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000021")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        self.vvdi, _ = MileageCorrectionDevice.objects.get_or_create(
+            name="VVDI Prog",
+            defaults={
+                "purchase_price": "70000.00", "purchase_date": date.today(),
+                "memory_type_support": MileageCorrectionDevice.MemoryTypeSupport.MCU,
+            },
+        )
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_meter_entry(
+            self.invoice, self.meter, serial_number="H1",
+            previous_km=1000, current_km=2000, condition_note="fine",
+            mileage_correction_device=self.vvdi,
+        )
+        self.client = APIClient()  # deliberately unauthenticated
+
+    def test_public_response_hides_device_and_includes_shop_branding(self):
+        ShopProfile.load()
+        profile = ShopProfile.objects.get(pk=1)
+        profile.shop_name = "Test Shop"
+        profile.invoice_footer_text = "Thanks for visiting"
+        profile.save()
+
+        response = self.client.get(f"/api/public/invoices/{self.invoice.public_share_token}/")
+        self.assertEqual(response.status_code, 200)
+
+        entry = response.data["meter_entries"][0]
+        self.assertNotIn("mileage_correction_device", entry)
+        self.assertNotIn("mileage_correction_device_name", entry)
+
+        self.assertEqual(response.data["shop_name"], "Test Shop")
+        self.assertEqual(response.data["invoice_footer_text"], "Thanks for visiting")
+        self.assertIn("due_amount", response.data)
+
+
+class InvoiceDeleteApiTests(TestCase):
+    """DELETE /api/invoices/{id}/ must soft delete (never hard delete),
+    excluding the invoice from list/retrieve but keeping the row in the
+    database - and must refuse to remove a fully paid invoice."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="invoice_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000031")
+
+    def test_delete_soft_deletes_unpaid_invoice(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_id = invoice.id
+
+        response = self.client.delete(f"/api/invoices/{invoice_id}/")
+        self.assertEqual(response.status_code, 204)
+
+        self.assertFalse(Invoice.objects.filter(id=invoice_id).exists())
+        stored = Invoice.all_objects.get(id=invoice_id)
+        self.assertTrue(stored.is_deleted)
+        self.assertIsNotNone(stored.deleted_at)
+
+        list_response = self.client.get("/api/invoices/")
+        returned_ids = [row["id"] for row in list_response.data]
+        self.assertNotIn(invoice_id, returned_ids)
+
+    def test_delete_rejected_for_fully_paid_invoice(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        entry = invoice_services.add_meter_entry(invoice, meter, serial_number="H1")
+        category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
+        service = Service.objects.create(category=category, name="Repair", service_price="300.00")
+        invoice_services.add_service_line(invoice, service, meter_entry=entry, price_charged=Decimal("300.00"))
+        invoice_services.add_payment(invoice, amount=Decimal("300.00"), payment_method="CASH")
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, Invoice.Status.PAID)
+
+        response = self.client.delete(f"/api/invoices/{invoice.id}/")
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Invoice.objects.filter(id=invoice.id).exists())
+
+
+class InvoiceDiscountServiceTests(TestCase):
+    """apps.invoices.services.apply_discount() - fixed-BDT invoice-level
+    discount, folded into total_amount = (services + products) - discount."""
+
+    def setUp(self):
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000041")
+        self.admin = User.objects.create_superuser(email="discount_admin@test.local", password="pass12345", name="Admin")
+        category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
+        self.service = Service.objects.create(category=category, name="Repair", service_price="1300.00")
+
+    def test_worked_example_1300_minus_100_discount_1000_paid_leaves_200_due(self):
+        """The exact scenario from the spec: 1300 BDT of work, 100 BDT
+        discount -> total_amount 1200, customer pays 1000 -> due 200 (not 300)."""
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+
+        invoice_services.apply_discount(invoice, discount_amount=Decimal("100.00"), discount_note="Loyal customer", user=self.admin)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.discount_amount, Decimal("100.00"))
+        self.assertEqual(invoice.discount_note, "Loyal customer")
+        self.assertEqual(invoice.total_amount, Decimal("1200.00"))
+
+        invoice_services.add_payment(invoice, amount=Decimal("1000.00"), payment_method="CASH")
+        invoice.refresh_from_db()
+
+        self.assertEqual(invoice.paid_amount, Decimal("1000.00"))
+        self.assertEqual(invoice.outstanding_amount, Decimal("200.00"))
+        self.assertEqual(invoice.status, Invoice.Status.PARTIAL)
+
+    def test_discount_applied_after_payment_still_recomputes_due_correctly(self):
+        """Order shouldn't matter: paying first, then discounting, produces
+        the same 1200 total / 200 due as discounting first."""
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+        invoice_services.add_payment(invoice, amount=Decimal("1000.00"), payment_method="CASH")
+
+        invoice_services.apply_discount(invoice, discount_amount=Decimal("100.00"), user=self.admin)
+        invoice.refresh_from_db()
+
+        self.assertEqual(invoice.total_amount, Decimal("1200.00"))
+        self.assertEqual(invoice.outstanding_amount, Decimal("200.00"))
+        self.assertEqual(invoice.status, Invoice.Status.PARTIAL)
+
+    def test_discount_equal_to_full_amount_zeroes_out_the_total(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+
+        invoice_services.apply_discount(invoice, discount_amount=Decimal("1300.00"), user=self.admin)
+        invoice.refresh_from_db()
+
+        self.assertEqual(invoice.total_amount, Decimal("0.00"))
+        self.assertEqual(invoice.outstanding_amount, Decimal("0.00"))
+        # Pre-existing determine_status() behavior, unrelated to discounts:
+        # paid_amount<=0 is checked first, so a fully-discounted invoice with
+        # no actual InvoicePayment stays UNPAID rather than PAID even though
+        # nothing is owed. Not something this change alters.
+        self.assertEqual(invoice.status, Invoice.Status.UNPAID)
+
+    def test_discount_cannot_exceed_gross_total(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.apply_discount(invoice, discount_amount=Decimal("1301.00"), user=self.admin)
+
+    def test_discount_cannot_drop_total_below_already_paid(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+        invoice_services.add_payment(invoice, amount=Decimal("1000.00"), payment_method="CASH")
+
+        # total would become 1300 - 400 = 900, below the 1000 already paid.
+        with self.assertRaises(InvoiceError):
+            invoice_services.apply_discount(invoice, discount_amount=Decimal("400.00"), user=self.admin)
+
+    def test_discount_rejected_on_non_editable_invoice(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+        invoice_services.add_payment(invoice, amount=Decimal("1300.00"), payment_method="CASH")
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, Invoice.Status.PAID)
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.apply_discount(invoice, discount_amount=Decimal("50.00"), user=self.admin)
+
+    def test_discount_rejected_when_negative(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.apply_discount(invoice, discount_amount=Decimal("-10.00"), user=self.admin)
+
+    def test_discount_applied_is_logged_with_amount_note_and_user(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1300.00"))
+
+        invoice_services.apply_discount(invoice, discount_amount=Decimal("100.00"), discount_note="Regular", user=self.admin)
+
+        entry = invoice.audit_logs.filter(action="discount_applied").latest("created_at")
+        self.assertEqual(entry.created_by, self.admin)
+        self.assertIn("100.00", entry.description)
+        self.assertIn("Regular", entry.description)
+
+
+class InvoiceDiscountApiTests(TestCase):
+    """POST /api/invoices/{id}/discount/ - Admin only."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="discount_api_admin@test.local", password="pass12345", name="Admin")
+        self.staff = User.objects.create_user(email="discount_api_staff@test.local", password="pass12345", name="Staff")
+        self.admin_client = APIClient()
+        self.admin_client.force_authenticate(self.admin)
+        self.staff_client = APIClient()
+        self.staff_client.force_authenticate(self.staff)
+
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000042")
+        category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
+        self.service = Service.objects.create(category=category, name="Repair", service_price="1300.00")
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(self.invoice, self.service, price_charged=Decimal("1300.00"))
+
+    def test_admin_can_apply_discount(self):
+        response = self.admin_client.post(
+            f"/api/invoices/{self.invoice.id}/discount/",
+            {"discount_amount": "100.00", "discount_note": "Loyal customer"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["discount_amount"], "100.00")
+        self.assertEqual(response.data["discount_note"], "Loyal customer")
+        self.assertEqual(response.data["total_amount"], "1200.00")
+
+    def test_staff_cannot_apply_discount(self):
+        response = self.staff_client.post(
+            f"/api/invoices/{self.invoice.id}/discount/",
+            {"discount_amount": "100.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.discount_amount, Decimal("0.00"))
+
+    def test_discount_shown_on_invoice_list(self):
+        invoice_services.apply_discount(self.invoice, discount_amount=Decimal("100.00"), user=self.admin)
+
+        response = self.admin_client.get("/api/invoices/")
+        self.assertEqual(response.status_code, 200)
+        row = next(r for r in response.data if r["id"] == self.invoice.id)
+        self.assertEqual(row["discount_amount"], "100.00")
+
+    def test_public_invoice_shows_discount_but_hides_who_applied_it(self):
+        invoice_services.apply_discount(self.invoice, discount_amount=Decimal("100.00"), discount_note="Loyal customer", user=self.admin)
+
+        public_client = APIClient()  # deliberately unauthenticated
+        response = public_client.get(f"/api/public/invoices/{self.invoice.public_share_token}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["discount_amount"], "100.00")
+        self.assertEqual(response.data["discount_note"], "Loyal customer")
+
+        discount_entry = next(h for h in response.data["history"] if h["action"] == "discount_applied")
+        self.assertNotIn("user", discount_entry)
+
+
+class InvoiceServiceLineAssetUsedApiTests(TestCase):
+    """POST /api/invoices/{id}/service-lines/ accepts an optional
+    asset_used, and it round-trips through the serializer."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="asset_used_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000043")
+        category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
+        self.service = Service.objects.create(category=category, name="Repair", service_price="300.00")
+        self.asset = Asset.objects.create(name="Soldering Iron", purchase_price="500.00", purchase_date=date.today())
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+    def test_add_service_line_with_asset_used(self):
+        response = self.client.post(
+            f"/api/invoices/{self.invoice.id}/service-lines/",
+            {"service": self.service.id, "asset_used": self.asset.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["asset_used"], self.asset.id)
+        self.assertEqual(response.data["asset_used_name"], "Soldering Iron")
+
+    def test_add_service_line_without_asset_used_defaults_to_null(self):
+        response = self.client.post(
+            f"/api/invoices/{self.invoice.id}/service-lines/",
+            {"service": self.service.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.data["asset_used"])
+        self.assertIsNone(response.data["asset_used_name"])
+
+
+class MergedAddServiceLineTests(TestCase):
+    """apps.invoices.services.add_service_line() - the merged meter+service
+    flow (rule i): for a Mileage Correction service with no pre-existing
+    meter_entry, this creates the InvoiceMeterEntry and InvoiceServiceLine
+    together in one call, with price defaulting to the meter's sales_price."""
+
+    def setUp(self):
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000051")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        self.vvdi, _ = MileageCorrectionDevice.objects.get_or_create(
+            name="VVDI Prog",
+            defaults={
+                "purchase_price": "70000.00", "purchase_date": date.today(),
+                "memory_type_support": MileageCorrectionDevice.MemoryTypeSupport.MCU,
+            },
+        )
+        mc_category = ServiceCategory.objects.create(name=ServiceCategory.Name.MILEAGE_CORRECTION)
+        self.mc_service = Service.objects.create(
+            category=mc_category, name="Mileage Correction", service_price="500.00",
+        )
+        repair_category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
+        self.repair_service = Service.objects.create(
+            category=repair_category, name="LED IC problem repair", service_price="300.00",
+        )
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+    def test_merged_call_creates_meter_entry_and_service_line_together(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service,
+            meter=self.meter, serial_number="MC-001", condition_note="Casing fine",
+            previous_km=15000, current_km=8000, mileage_correction_device=self.vvdi,
+        )
+
+        self.assertIsNotNone(line.meter_entry)
+        self.assertEqual(line.meter_entry.meter, self.meter)
+        self.assertEqual(line.meter_entry.serial_number, "MC-001")
+        self.assertEqual(line.meter_entry.previous_km, 15000)
+        self.assertEqual(line.meter_entry.current_km, 8000)
+        self.assertEqual(line.meter_entry.mileage_correction_device, self.vvdi)
+        self.assertEqual(self.invoice.meter_entries.count(), 1)
+
+    def test_price_defaults_to_meter_sales_price_when_blank(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service,
+            meter=self.meter, serial_number="MC-002", condition_note="Fine",
+            previous_km=15000, current_km=8000,
+        )
+        line.refresh_from_db()
+        self.assertEqual(line.price_charged, Decimal("1500.00"))  # meter.sales_price, not service_price
+
+    def test_explicit_price_overrides_default_instead_of_adding(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service,
+            meter=self.meter, serial_number="MC-003", condition_note="Fine",
+            previous_km=15000, current_km=8000, price_charged=Decimal("1200.00"),
+        )
+        self.assertEqual(line.price_charged, Decimal("1200.00"))
+
+    def test_regular_service_price_still_defaults_to_service_price(self):
+        line = invoice_services.add_service_line(self.invoice, self.repair_service)
+        line.refresh_from_db()
+        self.assertEqual(line.price_charged, Decimal("300.00"))
+        self.assertIsNone(line.meter_entry)
+
+    def test_merged_call_requires_meter_when_no_meter_entry_given(self):
+        with self.assertRaises(InvoiceError):
+            invoice_services.add_service_line(
+                self.invoice, self.mc_service, serial_number="MC-004", previous_km=1, current_km=1, condition_note="x",
+            )
+
+    def test_merged_call_still_enforces_km_and_condition_note(self):
+        with self.assertRaises(InvoiceError):
+            invoice_services.add_service_line(self.invoice, self.mc_service, meter=self.meter, serial_number="MC-005")
+
+    def test_merged_call_still_enforces_device_memory_type_match(self):
+        rt809f, _ = MileageCorrectionDevice.objects.get_or_create(
+            name="RT809F",
+            defaults={
+                "purchase_price": "7500.00", "purchase_date": date.today(),
+                "memory_type_support": MileageCorrectionDevice.MemoryTypeSupport.EEPROM,
+            },
+        )
+        with self.assertRaises(InvoiceError):
+            invoice_services.add_service_line(
+                self.invoice, self.mc_service, meter=self.meter, serial_number="MC-006",
+                condition_note="fine", previous_km=1, current_km=1, mileage_correction_device=rt809f,
+            )
+
+    def test_merged_call_rejected_on_non_editable_invoice(self):
+        invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("300.00"))
+        invoice_services.add_payment(self.invoice, amount=Decimal("300.00"), payment_method="CASH")
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, Invoice.Status.PAID)
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.add_service_line(
+                self.invoice, self.mc_service, meter=self.meter, serial_number="LATE",
+                condition_note="x", previous_km=1, current_km=1,
+            )
+
+
+class MergedAddServiceLineApiTests(TestCase):
+    """HTTP-level: POST /api/invoices/{id}/service-lines/ with the merged
+    meter+service payload, and the response shape it returns."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="merged_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000052")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        mc_category = ServiceCategory.objects.create(name=ServiceCategory.Name.MILEAGE_CORRECTION)
+        self.mc_service = Service.objects.create(
+            category=mc_category, name="Mileage Correction", service_price="500.00",
+        )
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+    def test_merged_request_shape_returns_line_with_nested_meter_entry(self):
+        response = self.client.post(
+            f"/api/invoices/{self.invoice.id}/service-lines/",
+            {
+                "service": self.mc_service.id,
+                "meter": self.meter.id,
+                "serial_number": "MC-100",
+                "condition_note": "Casing intact, screen fine",
+                "previous_km": 15000,
+                "current_km": 8000,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["price_charged"], "1500.00")  # defaulted from meter.sales_price
+        self.assertIsNotNone(response.data["meter_entry"])
+        entry = response.data["meter_entry_detail"]
+        self.assertEqual(entry["serial_number"], "MC-100")
+        self.assertEqual(entry["previous_km"], 15000)
+        self.assertEqual(entry["current_km"], 8000)
+
+        # one call, one meter entry - no separate meter-entries POST needed
+        self.assertEqual(self.invoice.meter_entries.count(), 1)
+
+    def test_meter_entry_added_is_logged_alongside_service_line_added(self):
+        self.client.post(
+            f"/api/invoices/{self.invoice.id}/service-lines/",
+            {
+                "service": self.mc_service.id, "meter": self.meter.id, "serial_number": "MC-101",
+                "condition_note": "fine", "previous_km": 1000, "current_km": 500,
+            },
+            format="json",
+        )
+        actions = list(self.invoice.audit_logs.order_by("created_at").values_list("action", flat=True))
+        self.assertEqual(actions, ["invoice_created", "meter_entry_added", "service_line_added"])
+
+
+class EditDeleteLineItemTests(TestCase):
+    """apps.invoices.services.update_service_line/delete_service_line/
+    update_product_line/delete_product_line (rule j)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="editline_admin@test.local", password="pass12345", name="Admin")
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000053")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        mc_category = ServiceCategory.objects.create(name=ServiceCategory.Name.MILEAGE_CORRECTION)
+        self.mc_service = Service.objects.create(
+            category=mc_category, name="Mileage Correction", service_price="500.00",
+        )
+        repair_category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
+        self.repair_service = Service.objects.create(category=repair_category, name="Repair", service_price="300.00")
+        self.supplier = Supplier.objects.create(name="ABC Traders", phone="01810000053")
+        self.product = Product.objects.create(
+            name="Meter Casing", sku="CASING-53", supplier=self.supplier,
+            buy_price="50.00", sale_price="150.00", current_stock_quantity=10,
+        )
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+    # --- update_service_line ---------------------------------------------------
+
+    def test_update_service_line_previous_km_updates_linked_meter_entry(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-1",
+            condition_note="fine", previous_km=15000, current_km=8000,
+        )
+        invoice_services.update_service_line(self.invoice, line, previous_km=14500, user=self.admin)
+
+        line.meter_entry.refresh_from_db()
+        self.assertEqual(line.meter_entry.previous_km, 14500)
+        self.assertEqual(line.meter_entry.current_km, 8000)  # untouched
+
+        entry = self.invoice.audit_logs.filter(action="service_line_updated").latest("created_at")
+        self.assertIn("previous_km", entry.description)
+        self.assertEqual(entry.created_by, self.admin)
+
+    def test_update_service_line_price_recalculates_invoice_totals(self):
+        line = invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("300.00"))
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("300.00"))
+
+        invoice_services.update_service_line(self.invoice, line, price_charged=Decimal("450.00"), user=self.admin)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("450.00"))
+
+    def test_update_service_line_without_meter_entry_rejects_km_fields(self):
+        line = invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("300.00"))
+        with self.assertRaises(InvoiceError):
+            invoice_services.update_service_line(self.invoice, line, previous_km=100)
+
+    def test_update_service_line_rejected_on_non_editable_invoice(self):
+        line = invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("300.00"))
+        invoice_services.add_payment(self.invoice, amount=Decimal("300.00"), payment_method="CASH")
+        self.invoice.refresh_from_db()
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.update_service_line(self.invoice, line, price_charged=Decimal("100.00"))
+
+    # --- delete_service_line ----------------------------------------------------
+
+    def test_delete_mileage_correction_line_also_removes_meter_entry(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-2",
+            condition_note="fine", previous_km=15000, current_km=8000,
+        )
+        entry_id = line.meter_entry_id
+        invoice_services.delete_service_line(self.invoice, line, user=self.admin)
+
+        self.assertFalse(self.invoice.service_lines.filter(pk=line.pk).exists())
+        self.assertFalse(self.invoice.meter_entries.filter(pk=entry_id).exists())
+
+        entry = self.invoice.audit_logs.filter(action="service_line_deleted").latest("created_at")
+        self.assertIn("meter entry", entry.description)
+
+    def test_delete_service_line_keeps_meter_entry_if_another_line_still_uses_it(self):
+        mc_line = invoice_services.add_service_line(
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-3",
+            condition_note="fine", previous_km=15000, current_km=8000,
+        )
+        entry = mc_line.meter_entry
+        other_line = invoice_services.add_service_line(
+            self.invoice, self.repair_service, meter_entry=entry, price_charged=Decimal("300.00"),
+        )
+
+        invoice_services.delete_service_line(self.invoice, mc_line, user=self.admin)
+
+        self.assertTrue(self.invoice.meter_entries.filter(pk=entry.pk).exists())
+        self.assertTrue(self.invoice.service_lines.filter(pk=other_line.pk).exists())
+
+    def test_delete_service_line_recalculates_totals(self):
+        line1 = invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("300.00"))
+        invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("200.00"))
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("500.00"))
+
+        invoice_services.delete_service_line(self.invoice, line1, user=self.admin)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("200.00"))
+
+    def test_delete_service_line_rejected_on_non_editable_invoice(self):
+        line = invoice_services.add_service_line(self.invoice, self.repair_service, price_charged=Decimal("300.00"))
+        invoice_services.add_payment(self.invoice, amount=Decimal("300.00"), payment_method="CASH")
+        self.invoice.refresh_from_db()
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.delete_service_line(self.invoice, line)
+
+    # --- update_product_line / delete_product_line ------------------------------
+
+    def test_update_product_line_quantity_adjusts_stock_and_totals(self):
+        line = invoice_services.add_product_line(self.invoice, self.product, quantity=2)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.current_stock_quantity, 8)
+
+        invoice_services.update_product_line(self.invoice, line, quantity=5, user=self.admin)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.current_stock_quantity, 5)  # 10 - 5
+
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("750.00"))  # 5 x 150
+
+    def test_update_product_line_rejects_insufficient_stock(self):
+        line = invoice_services.add_product_line(self.invoice, self.product, quantity=2)
+        with self.assertRaises(InvoiceError):
+            invoice_services.update_product_line(self.invoice, line, quantity=999)
+
+    def test_delete_product_line_restores_stock_and_recalculates(self):
+        line = invoice_services.add_product_line(self.invoice, self.product, quantity=3)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.current_stock_quantity, 7)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("450.00"))
+
+        invoice_services.delete_product_line(self.invoice, line, user=self.admin)
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.current_stock_quantity, 10)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.total_amount, Decimal("0.00"))
+
+        entry = self.invoice.audit_logs.filter(action="product_line_deleted").latest("created_at")
+        self.assertEqual(entry.created_by, self.admin)
+
+    def test_delete_product_line_rejected_on_non_editable_invoice(self):
+        line = invoice_services.add_product_line(self.invoice, self.product, quantity=1)
+        invoice_services.add_payment(self.invoice, amount=Decimal("150.00"), payment_method="CASH")
+        self.invoice.refresh_from_db()
+
+        with self.assertRaises(InvoiceError):
+            invoice_services.delete_product_line(self.invoice, line)
+
+
+class EditDeleteLineItemApiTests(TestCase):
+    """HTTP-level: PATCH/DELETE on the new nested line-item routes."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="editline_api_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000054")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        mc_category = ServiceCategory.objects.create(name=ServiceCategory.Name.MILEAGE_CORRECTION)
+        self.mc_service = Service.objects.create(
+            category=mc_category, name="Mileage Correction", service_price="500.00",
+        )
+        self.supplier = Supplier.objects.create(name="ABC Traders", phone="01810000054")
+        self.product = Product.objects.create(
+            name="Meter Casing", sku="CASING-54", supplier=self.supplier,
+            buy_price="50.00", sale_price="150.00", current_stock_quantity=10,
+        )
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+    def test_patch_service_line_updates_previous_km(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-9",
+            condition_note="fine", previous_km=15000, current_km=8000,
+        )
+        response = self.client.patch(
+            f"/api/invoices/{self.invoice.id}/service-lines/{line.id}/",
+            {"previous_km": 14500}, format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["meter_entry_detail"]["previous_km"], 14500)
+
+    def test_delete_service_line_returns_204(self):
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-10",
+            condition_note="fine", previous_km=15000, current_km=8000,
+        )
+        response = self.client.delete(f"/api/invoices/{self.invoice.id}/service-lines/{line.id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(self.invoice.service_lines.filter(pk=line.id).exists())
+
+    def test_patch_product_line_updates_quantity(self):
+        line = invoice_services.add_product_line(self.invoice, self.product, quantity=2)
+        response = self.client.patch(
+            f"/api/invoices/{self.invoice.id}/product-lines/{line.id}/",
+            {"quantity": 4}, format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["quantity"], 4)
+        self.assertEqual(response.data["line_total"], Decimal("600.00"))
+
+    def test_delete_product_line_returns_204(self):
+        line = invoice_services.add_product_line(self.invoice, self.product, quantity=1)
+        response = self.client.delete(f"/api/invoices/{self.invoice.id}/product-lines/{line.id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(self.invoice.product_lines.filter(pk=line.id).exists())
+
+
+class WorkedExampleMergedFlowTests(TestCase):
+    """The exact scenario from the spec: add a Mileage Correction service
+    with a blank price (defaults to the meter's sales_price), edit that
+    line's previous_km, then delete a different product line - checking
+    total_amount/due_amount recalculate correctly at every step."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="worked_example_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000055")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        mc_category = ServiceCategory.objects.create(name=ServiceCategory.Name.MILEAGE_CORRECTION)
+        self.mc_service = Service.objects.create(
+            category=mc_category, name="Mileage Correction", service_price="500.00",
+        )
+        self.supplier = Supplier.objects.create(name="ABC Traders", phone="01810000055")
+        self.product = Product.objects.create(
+            name="Meter Casing", sku="CASING-55", supplier=self.supplier,
+            buy_price="50.00", sale_price="150.00", current_stock_quantity=10,
+        )
+
+    def test_worked_example(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+        # Step 0: a product line already on the invoice, to be deleted later.
+        product_response = self.client.post(
+            f"/api/invoices/{invoice.id}/product-lines/",
+            {"product": self.product.id, "quantity": 2},
+            format="json",
+        )
+        self.assertEqual(product_response.status_code, 201)
+        product_line_id = product_response.data["id"]
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.total_amount, Decimal("300.00"))  # 2 x 150.00
+        self.assertEqual(invoice.outstanding_amount, Decimal("300.00"))
+
+        # Step 1: add the Mileage Correction service, meter picked, price blank.
+        service_response = self.client.post(
+            f"/api/invoices/{invoice.id}/service-lines/",
+            {
+                "service": self.mc_service.id, "meter": self.meter.id, "serial_number": "MC-WORKED-1",
+                "condition_note": "Casing intact, screen fine", "previous_km": 15000, "current_km": 8000,
+            },
+            format="json",
+        )
+        self.assertEqual(service_response.status_code, 201)
+        self.assertEqual(service_response.data["price_charged"], "1500.00")  # defaulted from meter.sales_price
+        service_line_id = service_response.data["id"]
+
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.total_amount, Decimal("1800.00"))  # 300 (product) + 1500 (meter default)
+        self.assertEqual(invoice.outstanding_amount, Decimal("1800.00"))
+
+        # Step 2: edit that line's previous_km.
+        edit_response = self.client.patch(
+            f"/api/invoices/{invoice.id}/service-lines/{service_line_id}/",
+            {"previous_km": 14750},
+            format="json",
+        )
+        self.assertEqual(edit_response.status_code, 200)
+        self.assertEqual(edit_response.data["meter_entry_detail"]["previous_km"], 14750)
+        self.assertEqual(edit_response.data["price_charged"], "1500.00")  # unaffected by the km edit
+
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.total_amount, Decimal("1800.00"))  # unchanged - price wasn't edited
+        self.assertEqual(invoice.outstanding_amount, Decimal("1800.00"))
+
+        # Step 3: delete the (different) product line.
+        delete_response = self.client.delete(f"/api/invoices/{invoice.id}/product-lines/{product_line_id}/")
+        self.assertEqual(delete_response.status_code, 204)
+
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.total_amount, Decimal("1500.00"))  # product line gone, only the meter service left
+        self.assertEqual(invoice.outstanding_amount, Decimal("1500.00"))
+        self.assertEqual(invoice.paid_amount, Decimal("0.00"))
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.current_stock_quantity, 10)  # 2 units restored
+
+        # Every step logged to the audit trail.
+        actions = list(invoice.audit_logs.order_by("created_at").values_list("action", flat=True))
+        self.assertEqual(
+            actions,
+            [
+                "invoice_created", "product_line_added", "meter_entry_added", "service_line_added",
+                "service_line_updated", "product_line_deleted",
+            ],
         )

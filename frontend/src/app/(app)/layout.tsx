@@ -1,6 +1,10 @@
+import { Plus } from "lucide-react";
+import Link from "next/link";
+
 import { AppSidebar } from "@/components/app-sidebar";
 import { RequireAuth } from "@/components/require-auth";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -17,6 +21,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
               <div className="flex flex-1 items-center justify-end gap-2">
+                <Button asChild size="sm">
+                  <Link href="/invoices/new">
+                    <Plus /> Add Invoice
+                  </Link>
+                </Button>
                 <ThemeToggle />
                 <UserMenu />
               </div>

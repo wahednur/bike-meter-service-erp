@@ -18,6 +18,7 @@ class Asset(BaseModel):
     )
     has_warranty = models.BooleanField(default=False)
     warranty_note = models.TextField(blank=True)
+    description = models.TextField(blank=True)
 
     class Meta:
         ordering = ["name"]

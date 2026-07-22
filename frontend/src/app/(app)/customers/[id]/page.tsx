@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, Pencil, Receipt } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { CustomerFormDialog } from "@/components/customer-form-dialog";
+import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,13 +19,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, getCustomer, getCustomerLedger } from "@/lib/api";
+import { getCustomer, getCustomerLedger } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 import type { Customer, CustomerLedger, InvoiceStatus } from "@/lib/types";
 
-function statusBadgeVariant(status: InvoiceStatus): "default" | "secondary" | "destructive" | "outline" {
+function statusBadgeVariant(status: InvoiceStatus): "secondary" | "destructive" | "outline" {
   switch (status) {
     case "PAID":
-      return "default";
+      // Not "default" - Badge's default variant (bg-primary text-primary-foreground)
+      // is low-contrast in dark mode (see button.tsx's comment on the same
+      // broken --primary-foreground token). "secondary" is already used for
+      // "good standing" elsewhere on this page and reads safely in both themes.
+      return "secondary";
     case "PARTIAL":
       return "secondary";
     case "CANCELLED":
@@ -57,7 +63,7 @@ function CustomerLedgerCard({ ledger }: { ledger: CustomerLedger }) {
         </dl>
 
         {ledger.invoices.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No invoices yet.</p>
+          <EmptyState icon={Receipt} title="No invoices yet" />
         ) : (
           <div className="rounded-lg border">
             <Table>
@@ -108,7 +114,7 @@ export default function CustomerDetailPage() {
         setLedger(ledgerResult);
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Failed to load this customer.");
+        setError(reportError(err, "Failed to load this customer."));
       });
   }, [customerId]);
 
@@ -137,7 +143,7 @@ export default function CustomerDetailPage() {
       </Link>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <CardTitle className="text-xl">{customer.name}</CardTitle>
             {customer.is_red_listed ? (
@@ -156,7 +162,7 @@ export default function CustomerDetailPage() {
             onSaved={load}
           />
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-xs text-muted-foreground">Phone</dt>
@@ -171,6 +177,12 @@ export default function CustomerDetailPage() {
               <dd>{customer.address || "—"}</dd>
             </div>
           </dl>
+          {customer.description && (
+            <div>
+              <dt className="mb-1 text-xs text-muted-foreground">Description</dt>
+              <dd className="text-sm">{customer.description}</dd>
+            </div>
+          )}
         </CardContent>
       </Card>
 

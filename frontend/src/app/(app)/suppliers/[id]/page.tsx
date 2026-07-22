@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, Package, Pencil, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { EmptyState } from "@/components/empty-state";
 import { SupplierFormDialog } from "@/components/supplier-form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, getSupplier, getSupplierLedger, getSupplierProfitAnalysis } from "@/lib/api";
+import { getSupplier, getSupplierLedger, getSupplierProfitAnalysis } from "@/lib/api";
+import { reportError } from "@/lib/errors";
 import type { Supplier, SupplierLedger, SupplierProfitAnalysisRow } from "@/lib/types";
 
 function formatDecimal(value: number | string): string {
@@ -52,7 +54,7 @@ function SupplierLedgerCard({ ledger }: { ledger: SupplierLedger }) {
         </dl>
 
         {ledger.products.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No products supplied yet.</p>
+          <EmptyState icon={Package} title="No products supplied yet" />
         ) : (
           <div className="rounded-lg border">
             <Table>
@@ -94,7 +96,7 @@ function ProfitMarginCard({ row }: { row: SupplierProfitAnalysisRow | null }) {
       </CardHeader>
       <CardContent>
         {!row ? (
-          <p className="text-sm text-muted-foreground">No product data yet for this supplier.</p>
+          <EmptyState icon={TrendingUp} title="No product data yet for this supplier" />
         ) : (
           <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             <div>
@@ -137,7 +139,7 @@ export default function SupplierDetailPage() {
         setProfitRow(profitRows.find((row) => row.supplier_id === supplierId) ?? null);
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Failed to load this supplier.");
+        setError(reportError(err, "Failed to load this supplier."));
       });
   }, [supplierId]);
 
@@ -166,7 +168,7 @@ export default function SupplierDetailPage() {
       </Link>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="text-xl">{supplier.name}</CardTitle>
           <SupplierFormDialog
             supplier={supplier}

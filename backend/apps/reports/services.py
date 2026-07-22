@@ -9,9 +9,9 @@ item's created_at, a purchase's purchase_date, etc.) - NOT always the
 parent Invoice's created_date, since an invoice can stay open and gain new
 line items across many separate visits (see apps.invoices rule a).
 """
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, TruncYear
 from django.utils import timezone
 
@@ -109,21 +109,33 @@ def _expense_components(from_date=None, to_date=None):
 
 def expense_report(period, from_date=None, to_date=None):
     """Expenses = product buy costs (ProductRestockEvent) + asset purchases
-    + mileage correction device purchases. Does NOT include AssetIncident
-    repair/damage costs or loan installment repayments - those are real
-    cash outflows too, but weren't part of the spec's expense definition;
-    they do show up in cashbook_report, which is meant to be exhaustive."""
+    + mileage correction device purchases + manual operating expenses
+    (apps.expenses.Expense - rent, electricity, transport, misc). Does NOT
+    include AssetIncident repair/damage costs or loan installment
+    repayments - those are real cash outflows too, but weren't part of the
+    spec's expense definition; they do show up in cashbook_report, which is
+    meant to be exhaustive."""
+    from apps.expenses.models import Expense
+
     restocks, assets, devices = _expense_components(from_date, to_date)
+
+    manual_expenses = Expense.objects.all()
+    if from_date:
+        manual_expenses = manual_expenses.filter(date__gte=from_date)
+    if to_date:
+        manual_expenses = manual_expenses.filter(date__lte=to_date)
 
     product_total = restocks.aggregate(total=Sum("total_cost"))["total"] or Decimal("0")
     asset_total = assets.aggregate(total=Sum("purchase_price"))["total"] or Decimal("0")
     device_total = devices.aggregate(total=Sum("purchase_price"))["total"] or Decimal("0")
-    total_expenses = product_total + asset_total + device_total
+    manual_total = manual_expenses.aggregate(total=Sum("amount"))["total"] or Decimal("0")
+    total_expenses = product_total + asset_total + device_total + manual_total
 
     breakdown = {
         "product_restocks": product_total,
         "asset_purchases": asset_total,
         "device_purchases": device_total,
+        "other_expenses": manual_total,
     }
 
     if period == "total":
@@ -147,6 +159,7 @@ def expense_report(period, from_date=None, to_date=None):
     _accumulate(restocks, "restocked_at", "total_cost")
     _accumulate(assets, "purchase_date", "purchase_price")
     _accumulate(devices, "purchase_date", "purchase_price")
+    _accumulate(manual_expenses, "date", "amount")
 
     rows = [{"period_start": bucket, "expense": amount} for bucket, amount in sorted(buckets.items())]
     return {"period": period, "rows": rows, "total_expenses": total_expenses, "breakdown": breakdown}
@@ -325,6 +338,140 @@ def due_report(from_date=None, to_date=None):
     return {"rows": rows, "invoice_count": len(rows), "total_due": total_due}
 
 
+# --- Top Customers Report ------------------------------------------------------
+
+TOP_CUSTOMERS_SORT_FIELDS = {
+    "total_billed_amount": "total_billed_amount",
+    "invoice_count": "invoice_count",
+}
+
+
+def top_customers_report(from_date=None, to_date=None, sort_by="total_billed_amount"):
+    """Ranks customers by how much work they've brought in - every non-cancelled
+    invoice's total_amount within the date range. A cancelled invoice never
+    represents completed work, so it's excluded here the same way it's
+    excluded from the red-list shortfall streak (see
+    apps.invoices.services._consecutive_shortfall_streak)."""
+    from apps.invoices.models import Invoice
+
+    if sort_by not in TOP_CUSTOMERS_SORT_FIELDS:
+        raise ReportError(f"sort_by must be one of: {', '.join(TOP_CUSTOMERS_SORT_FIELDS)}.")
+
+    invoices = Invoice.objects.exclude(status=Invoice.Status.CANCELLED)
+    if from_date:
+        invoices = invoices.filter(created_date__gte=from_date)
+    if to_date:
+        invoices = invoices.filter(created_date__lte=to_date)
+
+    grouped = (
+        invoices.values("customer_id", "customer__name")
+        .annotate(
+            invoice_count=Count("id"),
+            total_billed_amount=Sum("total_amount"),
+            total_paid_amount=Sum("paid_amount"),
+        )
+        .order_by(f"-{TOP_CUSTOMERS_SORT_FIELDS[sort_by]}")
+    )
+
+    rows = [
+        {
+            "customer_id": row["customer_id"],
+            "customer_name": row["customer__name"],
+            "invoice_count": row["invoice_count"],
+            "total_billed_amount": row["total_billed_amount"],
+            "total_paid_amount": row["total_paid_amount"],
+            "total_due_amount": row["total_billed_amount"] - row["total_paid_amount"],
+        }
+        for row in grouped
+    ]
+    return {"rows": rows, "customer_count": len(rows), "sort_by": sort_by}
+
+
+# --- Payment Delay Report -------------------------------------------------------
+
+def payment_delay_report(from_date=None, to_date=None):
+    """For every customer with at least one Unpaid/Partial Paid invoice
+    (within the date range, filtered on created_date like due_report), how
+    long has that money been outstanding? Per invoice, the delay clock
+    starts at the invoice's creation if it's never received a single
+    payment (Unpaid), or at the most recent payment if it has (Partial
+    Paid - the customer paid *something*, so the gap is measured from
+    their last contact, not the invoice's birth). Customers are then
+    ranked by their single longest-outstanding invoice, first."""
+    from apps.invoices.models import Invoice
+
+    invoices = Invoice.objects.filter(
+        status__in=[Invoice.Status.UNPAID, Invoice.Status.PARTIAL]
+    ).select_related("customer").prefetch_related("payments")
+    if from_date:
+        invoices = invoices.filter(created_date__gte=from_date)
+    if to_date:
+        invoices = invoices.filter(created_date__lte=to_date)
+
+    today = timezone.now().date()
+    by_customer = {}
+    for inv in invoices:
+        if inv.status == Invoice.Status.PARTIAL:
+            last_payment = max((p.payment_date for p in inv.payments.all()), default=None)
+            gap_start = last_payment.date() if last_payment else inv.created_date
+        else:
+            gap_start = inv.created_date
+        days_delayed = (today - gap_start).days
+
+        bucket = by_customer.setdefault(inv.customer_id, {
+            "customer_id": inv.customer_id,
+            "customer_name": inv.customer.name,
+            "invoice_nos": [],
+            "days_delayed": 0,
+            "amount_due": Decimal("0"),
+        })
+        bucket["invoice_nos"].append(inv.invoice_no)
+        bucket["days_delayed"] = max(bucket["days_delayed"], days_delayed)
+        bucket["amount_due"] += inv.outstanding_amount
+
+    rows = sorted(by_customer.values(), key=lambda r: r["days_delayed"], reverse=True)
+    return {"rows": rows, "customer_count": len(rows)}
+
+
+# --- Service Performance Report -------------------------------------------------
+
+def service_performance_report(from_date=None, to_date=None):
+    """Per-service equivalent of compute_meter_service_stats /
+    compute_mileage_correction_device_stats (apps.meters.services), but
+    date-range filterable and covering every service rather than one
+    meter/device at a time. Filtered on the line item's own created_at,
+    not the parent invoice's created_date - same reasoning as
+    sales_report (an invoice can stay open and gain lines across visits)."""
+    from apps.invoices.models import InvoiceServiceLine
+
+    lines = InvoiceServiceLine.objects.select_related("service")
+    if from_date:
+        lines = lines.filter(created_at__date__gte=from_date)
+    if to_date:
+        lines = lines.filter(created_at__date__lte=to_date)
+
+    grouped = (
+        lines.values("service_id", "service__name")
+        .annotate(times_performed=Count("id"), total_revenue=Sum("price_charged"))
+        .order_by("-total_revenue")
+    )
+
+    rows = [
+        {
+            "service_id": row["service_id"],
+            "service_name": row["service__name"],
+            "times_performed": row["times_performed"],
+            "total_revenue": row["total_revenue"],
+            "average_price": (
+                (row["total_revenue"] / row["times_performed"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if row["times_performed"] else Decimal("0")
+            ),
+        }
+        for row in grouped
+    ]
+    return {"rows": rows, "service_count": len(rows)}
+
+
 # --- Cashbook: every money movement, chronologically --------------------------
 
 def cashbook_report(from_date=None, to_date=None):
@@ -484,7 +631,10 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
     operational snapshot - today's income, pending dues, red-listed
     customers, low stock, and installments coming due soon. Not
     date-range-filterable, since "today" and "upcoming" are the point."""
+    import datetime
+
     from apps.customers.models import Customer
+    from apps.invoices.models import Invoice
     from apps.loans import services as loan_services
     from apps.products import services as product_services
 
@@ -495,6 +645,18 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
 
     today_income_data = income_report("total", from_date=today, to_date=today)
     due_data = due_report()
+
+    # Invoice.created_date is a plain DateField(auto_now_add=True), which
+    # Django populates via datetime.date.today() (OS-local calendar day) -
+    # NOT timezone.now().date() (UTC calendar day, what `today` above is).
+    # The two only diverge for a few hours a day, but that's exactly when a
+    # naive comparison would silently drop today's invoices, so match the
+    # field's own semantics here rather than reusing `today`.
+    invoice_today = datetime.date.today()
+    today_invoices = Invoice.objects.filter(created_date=invoice_today)
+    today_invoice_count = today_invoices.count()
+    today_total_amount = today_invoices.aggregate(total=Sum("total_amount"))["total"] or Decimal("0")
+    total_income_all_time = Invoice.objects.aggregate(total=Sum("paid_amount"))["total"] or Decimal("0")
 
     red_listed_customers_count = Customer.objects.filter(is_red_listed=True).count()
 
@@ -508,6 +670,9 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
     return {
         "date": today,
         "today_income": today_income_data["total_income"],
+        "today_invoice_count": today_invoice_count,
+        "today_total_amount": today_total_amount,
+        "total_income_all_time": total_income_all_time,
         "pending_dues": {"invoice_count": due_data["invoice_count"], "total_due": due_data["total_due"]},
         "red_listed_customers_count": red_listed_customers_count,
         "low_stock_products": low_stock_rows,

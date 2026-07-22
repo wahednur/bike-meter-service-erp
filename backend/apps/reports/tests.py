@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
@@ -227,7 +227,123 @@ class ReportServiceTests(TestCase):
         data = report_services.admin_dashboard_summary(low_stock_threshold=5, upcoming_days=10)
 
         self.assertEqual(data["today_income"], Decimal("100.00"))
+        self.assertEqual(data["today_invoice_count"], 1)
+        self.assertEqual(data["today_total_amount"], Decimal("300.00"))
+        self.assertEqual(data["total_income_all_time"], Decimal("100.00"))
         self.assertEqual(data["pending_dues"]["invoice_count"], 1)
         self.assertGreaterEqual(data["red_listed_customers_count"], 1)
         self.assertTrue(any(p["sku"] == "LOWSTOCK-1" for p in data["low_stock_products"]))
         self.assertEqual(len(data["upcoming_loan_installments"]), 1)
+
+    # --- top customers report ---------------------------------------------------
+
+    def test_top_customers_report_sorts_by_billed_amount_by_default(self):
+        other_customer = Customer.objects.create(name="Nasrin Akter", phone="01710000012")
+
+        # self.customer: 3 fully-settled invoices, 300 each = 900 total.
+        for _ in range(3):
+            invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+            invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("300.00"))
+            invoice_services.add_payment(invoice, amount=Decimal("300.00"), payment_method="CASH")
+
+        # other_customer: one big invoice, partially paid.
+        big_invoice, _ = invoice_services.get_or_create_open_invoice(other_customer)
+        invoice_services.add_service_line(big_invoice, self.service, price_charged=Decimal("2000.00"))
+        invoice_services.add_payment(big_invoice, amount=Decimal("500.00"), payment_method="CASH")
+
+        data = report_services.top_customers_report()
+        names_by_billed = [row["customer_name"] for row in data["rows"]]
+        self.assertEqual(names_by_billed[0], "Nasrin Akter")  # 2000 > 900
+        other_row = next(r for r in data["rows"] if r["customer_name"] == "Nasrin Akter")
+        self.assertEqual(other_row["invoice_count"], 1)
+        self.assertEqual(other_row["total_billed_amount"], Decimal("2000.00"))
+        self.assertEqual(other_row["total_paid_amount"], Decimal("500.00"))
+        self.assertEqual(other_row["total_due_amount"], Decimal("1500.00"))
+
+        data_by_count = report_services.top_customers_report(sort_by="invoice_count")
+        names_by_count = [row["customer_name"] for row in data_by_count["rows"]]
+        self.assertEqual(names_by_count[0], "Karim Motors")  # 3 invoices > 1
+
+    def test_top_customers_report_excludes_cancelled_invoices(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("500.00"))
+        invoice_services.cancel_invoice(invoice)
+
+        data = report_services.top_customers_report()
+        self.assertEqual(data["rows"], [])
+
+    def test_top_customers_report_rejects_unknown_sort_field(self):
+        with self.assertRaises(ReportError):
+            report_services.top_customers_report(sort_by="not_a_field")
+
+    # --- payment delay report -----------------------------------------------------
+
+    def test_payment_delay_report_ranks_longest_outstanding_first(self):
+        other_customer = Customer.objects.create(name="Nasrin Akter", phone="01710000013")
+        today = timezone.now().date()
+
+        unpaid_invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(unpaid_invoice, self.service, price_charged=Decimal("300.00"))
+        Invoice.objects.filter(pk=unpaid_invoice.pk).update(created_date=today - timedelta(days=10))
+
+        partial_invoice, _ = invoice_services.get_or_create_open_invoice(other_customer)
+        invoice_services.add_service_line(partial_invoice, self.service, price_charged=Decimal("1000.00"))
+        Invoice.objects.filter(pk=partial_invoice.pk).update(created_date=today - timedelta(days=20))
+        invoice_services.add_payment(
+            partial_invoice, amount=Decimal("400.00"), payment_method="CASH",
+            payment_date=_aware(today.year, today.month, today.day) - timedelta(days=3),
+        )
+
+        data = report_services.payment_delay_report()
+        self.assertEqual(len(data["rows"]), 2)
+
+        first, second = data["rows"]
+        self.assertEqual(first["customer_name"], "Karim Motors")  # unpaid since creation, 10 days
+        self.assertEqual(first["days_delayed"], 10)
+        self.assertEqual(first["invoice_nos"], [unpaid_invoice.invoice_no])
+        self.assertEqual(first["amount_due"], Decimal("300.00"))
+
+        self.assertEqual(second["customer_name"], "Nasrin Akter")  # partial paid 3 days ago
+        self.assertEqual(second["days_delayed"], 3)
+        self.assertEqual(second["amount_due"], Decimal("600.00"))
+
+    def test_payment_delay_report_excludes_fully_paid_invoices(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("300.00"))
+        invoice_services.add_payment(invoice, amount=Decimal("300.00"), payment_method="CASH")
+
+        data = report_services.payment_delay_report()
+        self.assertEqual(data["rows"], [])
+
+    # --- service performance report ------------------------------------------------
+
+    def test_service_performance_report_ranks_by_revenue(self):
+        battery_service = Service.objects.create(
+            category=self.service.category, name="Battery Replacement", service_price="1000.00",
+        )
+
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("300.00"))
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("500.00"))
+        invoice_services.add_service_line(invoice, battery_service, price_charged=Decimal("1000.00"))
+
+        data = report_services.service_performance_report()
+        names = [row["service_name"] for row in data["rows"]]
+        self.assertEqual(names[0], "Battery Replacement")  # 1000 > 800
+
+        led_row = next(r for r in data["rows"] if r["service_name"] == "LED Repair")
+        self.assertEqual(led_row["times_performed"], 2)
+        self.assertEqual(led_row["total_revenue"], Decimal("800.00"))
+        self.assertEqual(led_row["average_price"], Decimal("400.00"))
+
+    def test_service_performance_report_excludes_lines_outside_date_range(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        line = invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("300.00"))
+        from apps.invoices.models import InvoiceServiceLine
+
+        InvoiceServiceLine.objects.filter(pk=line.pk).update(created_at=_aware(2020, 1, 1))
+
+        data = report_services.service_performance_report(
+            from_date=date(2026, 1, 1), to_date=date(2026, 12, 31),
+        )
+        self.assertEqual(data["rows"], [])

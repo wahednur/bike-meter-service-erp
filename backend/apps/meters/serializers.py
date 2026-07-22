@@ -10,7 +10,7 @@ class MeterSerializer(serializers.ModelSerializer):
         model = Meter
         fields = [
             "id", "brand", "model", "cc", "memory_type", "ic_mcu_model",
-            "title", "sales_price", "image",
+            "title", "sales_price", "image", "description",
             "created_at", "updated_at", "created_by",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by"]
@@ -58,6 +58,19 @@ class MeterListSerializer(MeterSerializer):
 
     def get_average_sale_price(self, obj):
         return None
+
+
+class MeterServiceBreakdownItemSerializer(serializers.Serializer):
+    service_name = serializers.CharField()
+    count = serializers.IntegerField()
+    revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class MeterServiceStatsSerializer(serializers.Serializer):
+    total_services_count = serializers.IntegerField()
+    total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
+    last_service_date = serializers.DateTimeField(allow_null=True)
+    service_breakdown = MeterServiceBreakdownItemSerializer(many=True)
 
 
 class MileageCorrectionDeviceSerializer(serializers.ModelSerializer):

@@ -1,12 +1,16 @@
 from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from apps.accounts.permissions import IsAdmin, IsAdminOrHasModelPermission
 from apps.meters.models import MileageCorrectionDevice, Meter
 from apps.meters.serializers import (
     MeterListSerializer,
     MeterSerializer,
+    MeterServiceStatsSerializer,
     MileageCorrectionDeviceSerializer,
 )
+from apps.meters.services import compute_meter_service_stats
 
 
 class MeterViewSet(viewsets.ModelViewSet):
@@ -26,6 +30,12 @@ class MeterViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         instance.delete()  # soft delete, see BaseModel.delete()
+
+    @action(detail=True, methods=["get"])
+    def stats(self, request, pk=None):
+        meter = self.get_object()
+        stats = compute_meter_service_stats(meter)
+        return Response(MeterServiceStatsSerializer(stats).data)
 
 
 class MileageCorrectionDeviceViewSet(viewsets.ModelViewSet):

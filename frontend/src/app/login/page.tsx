@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { reportError } from "@/lib/errors";
+import { useShopProfile } from "@/lib/shop-profile-context";
 
 const loginSchema = z.object({
   identifier: z.string().min(1, "Email or phone is required"),
@@ -22,6 +23,7 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const { login, user, isLoading } = useAuth();
+  const { shopProfile, refresh: refreshShopProfile } = useShopProfile();
   const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -44,9 +46,10 @@ export default function LoginPage() {
     setFormError(null);
     try {
       await login(values.identifier, values.password);
+      refreshShopProfile();
       router.replace("/dashboard");
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+      setFormError(reportError(err, "Something went wrong. Please try again."));
     }
   }
 
@@ -54,7 +57,7 @@ export default function LoginPage() {
     <div className="flex flex-1 items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Bike Meter ERP</CardTitle>
+          <CardTitle>{shopProfile.shop_name}</CardTitle>
           <CardDescription>Sign in with your email/phone and password.</CardDescription>
         </CardHeader>
         <CardContent>

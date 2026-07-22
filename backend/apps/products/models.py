@@ -15,6 +15,7 @@ class Product(BaseModel):
     buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     sale_price = models.DecimalField(max_digits=10, decimal_places=2)
     image = models.ImageField(upload_to="products/", null=True, blank=True)
+    description = models.TextField(blank=True)
     current_stock_quantity = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -48,3 +49,52 @@ class ProductRestockEvent(BaseModel):
 
     def __str__(self):
         return f"{self.quantity} x {self.product.name} on {self.restocked_at:%Y-%m-%d}"
+
+
+class Purchase(BaseModel):
+    """One trip to a supplier that may cover several different products at
+    once, sharing a single incidental cost (delivery, packaging) across all
+    of them. See apps.products.services.apply_purchase(), which splits
+    shared_extra_costs proportionally across the line items by each line's
+    subtotal share, then restocks every product via the existing
+    restock_product() - never call restock_product() directly for a line
+    item that belongs to a Purchase."""
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name="purchases")
+    purchase_date = models.DateField()
+    shared_extra_costs = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    note = models.TextField(blank=True)
+
+    # Set by apply_purchase() once its line items have been restocked -
+    # guards against silently double-restocking the same purchase.
+    processed_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ["-purchase_date"]
+
+    def __str__(self):
+        return f"Purchase from {self.supplier.name} on {self.purchase_date}"
+
+    @property
+    def is_processed(self):
+        return self.processed_at is not None
+
+
+class PurchaseLineItem(BaseModel):
+    """One product within a Purchase, at the price actually paid for it -
+    before any share of the purchase's shared_extra_costs is folded in."""
+
+    purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, related_name="line_items")
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="purchase_line_items")
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.product.name} @ {self.unit_price}"
+
+    @property
+    def subtotal(self):
+        return self.unit_price * self.quantity
