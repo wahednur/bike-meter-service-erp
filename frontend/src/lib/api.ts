@@ -26,11 +26,13 @@ import type {
   CustomerCsvPreview,
   CustomerLedger,
   CustomerPayload,
+  DeleteLinePayload,
   DueReport,
   Expense,
   ExpenseListFilters,
   ExpensePayload,
   ExpenseReport,
+  ForceCloseInvoicePayload,
   IncomeReport,
   Invoice,
   InvoiceDetail,
@@ -74,6 +76,7 @@ import type {
   TopCustomersReport,
   TopCustomersSortBy,
   SystemUser,
+  UpdateInvoiceCreatedDatePayload,
   UpdateProductLinePayload,
   UpdateServiceLinePayload,
 } from "./types";
@@ -487,6 +490,13 @@ export function restockProduct(id: number, payload: RestockPayload): Promise<Pro
   return apiFetch<ProductItem>(`/products/${id}/restock/`, { method: "POST", body: JSON.stringify(payload) });
 }
 
+// Read-only live preview - see apps.products.services.generate_sku(). Not
+// reserved: the actual create call generates its own SKU if none is given.
+export function previewProductSku(supplierId: number, name: string): Promise<{ sku: string }> {
+  const query = new URLSearchParams({ supplier: String(supplierId), name });
+  return apiFetch<{ sku: string }>(`/products/preview-sku/?${query.toString()}`);
+}
+
 // --- purchases (multi-product restock, shared delivery/packaging cost) --------
 
 export function createPurchase(payload: CreatePurchasePayload): Promise<Purchase> {
@@ -543,8 +553,11 @@ export function updateServiceLine(
   });
 }
 
-export function deleteServiceLine(invoiceId: number, lineId: number): Promise<void> {
-  return apiFetch<void>(`/invoices/${invoiceId}/service-lines/${lineId}/`, { method: "DELETE" });
+export function deleteServiceLine(invoiceId: number, lineId: number, payload: DeleteLinePayload = {}): Promise<void> {
+  return apiFetch<void>(`/invoices/${invoiceId}/service-lines/${lineId}/`, {
+    method: "DELETE",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function addProductLine(invoiceId: number, payload: AddProductLinePayload): Promise<InvoiceProductLine> {
@@ -565,8 +578,11 @@ export function updateProductLine(
   });
 }
 
-export function deleteProductLine(invoiceId: number, lineId: number): Promise<void> {
-  return apiFetch<void>(`/invoices/${invoiceId}/product-lines/${lineId}/`, { method: "DELETE" });
+export function deleteProductLine(invoiceId: number, lineId: number, payload: DeleteLinePayload = {}): Promise<void> {
+  return apiFetch<void>(`/invoices/${invoiceId}/product-lines/${lineId}/`, {
+    method: "DELETE",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function addPayment(invoiceId: number, payload: AddPaymentPayload): Promise<InvoicePayment> {
@@ -584,6 +600,28 @@ export function cancelInvoice(invoiceId: number): Promise<InvoiceDetail> {
 
 export function applyDiscount(invoiceId: number, payload: ApplyDiscountPayload): Promise<InvoiceDetail> {
   return apiFetch<InvoiceDetail>(`/invoices/${invoiceId}/discount/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Admin-only "accept the remaining balance as final" write-off - records
+ * it as invoice.waived_amount (kept separate from a discount) and marks
+ * the invoice Paid. See apps.invoices.services.force_close_invoice(). */
+export function forceCloseInvoice(invoiceId: number, payload: ForceCloseInvoicePayload): Promise<InvoiceDetail> {
+  return apiFetch<InvoiceDetail>(`/invoices/${invoiceId}/force-close/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Admin-only edit of created_date - `reason` is required only if the
+ * invoice is Paid/force-closed. */
+export function updateInvoiceCreatedDate(
+  invoiceId: number,
+  payload: UpdateInvoiceCreatedDatePayload,
+): Promise<InvoiceDetail> {
+  return apiFetch<InvoiceDetail>(`/invoices/${invoiceId}/created-date/`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

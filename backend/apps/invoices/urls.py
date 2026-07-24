@@ -23,4 +23,9 @@ urlpatterns = router.urls + [
         InvoiceViewSet.as_view({"patch": "update_product_line", "delete": "destroy_product_line"}),
         name="invoice-product-line-detail",
     ),
+    path(
+        "invoices/<int:pk>/payments/<int:payment_pk>/",
+        InvoiceViewSet.as_view({"patch": "update_payment", "delete": "destroy_payment"}),
+        name="invoice-payment-detail",
+    ),
 ]

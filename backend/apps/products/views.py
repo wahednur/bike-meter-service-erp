@@ -9,12 +9,13 @@ from apps.accounts.permissions import IsAdminOrHasModelPermission
 from apps.products.models import Product, Purchase, PurchaseLineItem
 from apps.products.serializers import (
     CreatePurchaseInputSerializer,
+    PreviewSkuInputSerializer,
     ProductSerializer,
     PurchaseSerializer,
     RestockSerializer,
     StockAdjustmentSerializer,
 )
-from apps.products.services import apply_purchase, restock_product
+from apps.products.services import apply_purchase, generate_sku, restock_product
 
 
 class ProductViewSet(viewsets.ModelViewSet):
@@ -65,6 +66,19 @@ class ProductViewSet(viewsets.ModelViewSet):
         product.current_stock_quantity = new_quantity
         product.save(update_fields=["current_stock_quantity", "updated_at"])
         return Response(ProductSerializer(product, context=self.get_serializer_context()).data)
+
+    @action(detail=False, methods=["get"], url_path="preview-sku")
+    def preview_sku(self, request):
+        """Live preview for the Add Product dialog - what generate_sku()
+        would assign right now, given a supplier + product name. Read-only:
+        doesn't create or reserve anything, so it's safe to call on every
+        keystroke. The actual product-creation call still generates its own
+        SKU from scratch if none is supplied, since this preview can go
+        stale (e.g. another product gets created in between)."""
+        serializer = PreviewSkuInputSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        sku = generate_sku(serializer.validated_data["supplier"].name, serializer.validated_data["name"])
+        return Response({"sku": sku})
 
     @action(detail=False, methods=["get"], url_path="supplier-profit-analysis")
     def supplier_profit_analysis(self, request):

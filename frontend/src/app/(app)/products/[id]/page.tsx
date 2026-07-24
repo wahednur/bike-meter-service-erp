@@ -98,7 +98,11 @@ export default function ProductDetailPage() {
             <dl className="grid flex-1 grid-cols-2 gap-3 text-sm sm:grid-cols-4">
               <div>
                 <dt className="text-xs text-muted-foreground">SKU</dt>
-                <dd>{product.sku}</dd>
+                <dd>
+                  <Badge variant="outline" className="font-mono">
+                    {product.sku}
+                  </Badge>
+                </dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Supplier</dt>

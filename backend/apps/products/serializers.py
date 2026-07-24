@@ -1,13 +1,29 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
 from apps.products.models import Product, Purchase, PurchaseLineItem
 from apps.suppliers.models import Supplier
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    """`sku` is optional on input - see apps.products.services.generate_sku()
+    for the {supplier_prefix}{product_code}-{serial} auto-generation rule
+    applied in create() below when the caller doesn't supply their own.
+
+    Declaring `sku` explicitly (rather than leaving it to ModelSerializer's
+    auto-generated field) means DRF no longer attaches its usual automatic
+    UniqueValidator, so it's added back here explicitly - against
+    all_objects (not the soft-delete-filtered default manager), matching
+    the model's DB-level unique constraint, which applies to every row
+    regardless of is_deleted."""
+
     profit_margin = serializers.ReadOnlyField()
+    sku = serializers.CharField(
+        required=False, allow_blank=True, max_length=50,
+        validators=[UniqueValidator(queryset=Product.all_objects.all())],
+    )
 
     class Meta:
         model = Product
@@ -17,6 +33,24 @@ class ProductSerializer(serializers.ModelSerializer):
             "created_at", "updated_at", "created_by",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by"]
+
+    def create(self, validated_data):
+        if not validated_data.get("sku"):
+            from apps.products.services import generate_sku
+
+            validated_data["sku"] = generate_sku(validated_data["supplier"].name, validated_data["name"])
+        return super().create(validated_data)
+
+
+class PreviewSkuInputSerializer(serializers.Serializer):
+    """GET /api/products/preview-sku/?supplier=&name= - read-only live
+    preview of what apps.products.services.generate_sku() would assign
+    right now. Used by the Add Product dialog to show the SKU before the
+    product is actually saved; the value shown is not reserved, so the
+    real generate_sku() call at save time is the authoritative one."""
+
+    supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all())
+    name = serializers.CharField(max_length=150)
 
 
 class RestockSerializer(serializers.Serializer):

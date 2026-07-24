@@ -315,3 +315,154 @@ class ProductImageAbsoluteUrlApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["image"].startswith("http://testserver/media/"))
+
+
+class SkuGenerationTests(TestCase):
+    """apps.products.services.generate_sku() - the
+    {supplier_prefix}{product_code}-{serial} SKU auto-generation rule."""
+
+    def setUp(self):
+        self.supplier = Supplier.objects.create(name="Meter Expert BD", phone="01810000040")
+
+    def test_confirmed_example(self):
+        self.assertEqual(
+            product_services.generate_sku("Meter Expert BD", "Pulsar Display UG4"), "MEPDUG4-01",
+        )
+
+    def test_single_word_supplier_and_product_name(self):
+        # No 2nd word for either side: supplier prefix is just its one
+        # initial, product code has no "every word except the last" so it
+        # falls through to the bare word itself.
+        self.assertEqual(product_services.generate_sku("Bosch", "Casing"), "BCasing-01")
+
+    def test_trailing_country_code_dropped_and_numbers_in_variant_code(self):
+        # "UK" (<=3 chars, ALL-CAPS) is dropped from the supplier name;
+        # "125cc" is a perfectly valid "word" for initialing purposes even
+        # though it starts with a digit.
+        self.assertEqual(
+            product_services.generate_sku("ABC Traders UK", "125cc Meter V2"), "AT1MV2-01",
+        )
+
+    def test_short_trailing_word_kept_when_not_all_caps(self):
+        # "Go" is short (<=3 chars) but not ALL-CAPS, so it reads as a real
+        # word, not a country/branch code - it stays in as the 2nd initial.
+        self.assertEqual(product_services.generate_sku("Speedy Go", "Repair Kit"), "SGRKit-01")
+
+    def test_serial_increments_for_same_supplier_and_product_combination(self):
+        sku1 = product_services.generate_sku("Meter Expert BD", "Pulsar Display UG4")
+        Product.objects.create(name="Pulsar Display UG4", sku=sku1, supplier=self.supplier, sale_price="500.00")
+
+        sku2 = product_services.generate_sku("Meter Expert BD", "Pulsar Display UG4")
+        self.assertEqual(sku2, "MEPDUG4-02")
+
+        # A different product code entirely starts its own sequence at -01.
+        other_sku = product_services.generate_sku("Meter Expert BD", "Speedo Cable")
+        self.assertEqual(other_sku, "MESCable-01")
+
+    def test_soft_deleted_products_still_reserve_their_serial(self):
+        """Rule: a deleted product's serial slot is never reissued - the
+        sequence must keep counting soft-deleted rows (BaseModel.delete())."""
+        sku1 = product_services.generate_sku("Meter Expert BD", "Pulsar Display UG4")
+        product1 = Product.objects.create(
+            name="Pulsar Display UG4", sku=sku1, supplier=self.supplier, sale_price="500.00",
+        )
+        sku2 = product_services.generate_sku("Meter Expert BD", "Pulsar Display UG4")
+        Product.objects.create(name="Pulsar Display UG4", sku=sku2, supplier=self.supplier, sale_price="500.00")
+
+        product1.delete()  # soft delete
+        self.assertFalse(Product.objects.filter(pk=product1.pk).exists())  # gone from the default manager
+        self.assertTrue(Product.all_objects.filter(pk=product1.pk).exists())  # still there underneath
+
+        sku3 = product_services.generate_sku("Meter Expert BD", "Pulsar Display UG4")
+        self.assertEqual(sku3, "MEPDUG4-03")  # NOT reissued as -01
+
+
+class SkuAutoGenerationApiTests(TestCase):
+    """POST /api/products/ auto-generates `sku` when omitted, but still
+    accepts (and validates the uniqueness of) a manually-supplied one."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="sku_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+        self.supplier = Supplier.objects.create(name="Meter Expert BD", phone="01810000041")
+
+    def test_create_without_sku_auto_generates_it(self):
+        response = self.client.post(
+            "/api/products/",
+            {"name": "Pulsar Display UG4", "supplier": self.supplier.id, "sale_price": "500.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["sku"], "MEPDUG4-01")
+
+    def test_second_product_of_same_kind_gets_next_serial(self):
+        self.client.post(
+            "/api/products/",
+            {"name": "Pulsar Display UG4", "supplier": self.supplier.id, "sale_price": "500.00"},
+            format="json",
+        )
+        response = self.client.post(
+            "/api/products/",
+            {"name": "Pulsar Display UG4", "supplier": self.supplier.id, "sale_price": "500.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["sku"], "MEPDUG4-02")
+
+    def test_manual_sku_overrides_auto_generation(self):
+        response = self.client.post(
+            "/api/products/",
+            {
+                "name": "Pulsar Display UG4", "supplier": self.supplier.id, "sale_price": "500.00",
+                "sku": "MY-OWN-SKU",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["sku"], "MY-OWN-SKU")
+
+    def test_duplicate_manual_sku_rejected_with_clean_validation_error(self):
+        Product.objects.create(
+            name="Existing", sku="DUPLICATE-1", supplier=self.supplier, sale_price="100.00",
+        )
+        response = self.client.post(
+            "/api/products/",
+            {"name": "Another", "supplier": self.supplier.id, "sale_price": "100.00", "sku": "DUPLICATE-1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("sku", response.data)
+
+
+class PreviewSkuApiTests(TestCase):
+    """GET /api/products/preview-sku/ - live SKU preview for the Add
+    Product dialog. Read-only: never creates a Product."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="preview_sku_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+        self.supplier = Supplier.objects.create(name="Meter Expert BD", phone="01810000042")
+
+    def test_preview_matches_confirmed_example(self):
+        response = self.client.get(
+            "/api/products/preview-sku/", {"supplier": self.supplier.id, "name": "Pulsar Display UG4"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["sku"], "MEPDUG4-01")
+
+    def test_preview_reflects_next_serial_without_creating_anything(self):
+        Product.objects.create(
+            name="Pulsar Display UG4", sku="MEPDUG4-01", supplier=self.supplier, sale_price="500.00",
+        )
+        response = self.client.get(
+            "/api/products/preview-sku/", {"supplier": self.supplier.id, "name": "Pulsar Display UG4"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["sku"], "MEPDUG4-02")
+        self.assertEqual(Product.objects.count(), 1)  # preview didn't create a second product
+
+    def test_preview_requires_supplier_and_name(self):
+        response = self.client.get("/api/products/preview-sku/", {"supplier": self.supplier.id})
+        self.assertEqual(response.status_code, 400)

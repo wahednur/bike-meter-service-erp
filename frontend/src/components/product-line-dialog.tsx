@@ -25,13 +25,17 @@ function ErrorBanner({ message }: { message: string | null }) {
   return <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</p>;
 }
 
-/** Add-or-edit dialog for one InvoiceProductLine - same reuse pattern as
- * ServiceLineDialog. Editing can't change which product a line is for
- * (only quantity/price); the product field renders disabled, pre-filled. */
+/** Add-or-edit-or-replace dialog for one InvoiceProductLine - same reuse
+ * pattern as ServiceLineDialog. Plain editing keeps the product fixed
+ * (only quantity/price change); pass `allowReplace` to unlock it (rule 8's
+ * "replace which product this line is for"). `reason` is forwarded to the
+ * edit call when reopening a Paid invoice under the Admin exception. */
 export function ProductLineDialog({
   invoiceId,
   products,
   productLine,
+  allowReplace = false,
+  reason,
   trigger,
   open: openProp,
   onOpenChange: onOpenChangeProp,
@@ -40,6 +44,8 @@ export function ProductLineDialog({
   invoiceId: number;
   products: ProductItem[];
   productLine?: InvoiceProductLine;
+  allowReplace?: boolean;
+  reason?: string;
   trigger?: ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -77,9 +83,11 @@ export function ProductLineDialog({
   }, [open, productLine]);
 
   useEffect(() => {
-    if (isEdit || priceEdited) return;
+    if ((isEdit && !allowReplace) || priceEdited) return;
     setPrice(defaultPrice ?? "");
-  }, [isEdit, priceEdited, defaultPrice]);
+  }, [isEdit, allowReplace, priceEdited, defaultPrice]);
+
+  const productLocked = isEdit && !allowReplace;
 
   const productOptions: ComboboxOption[] = products.map((product) => ({
     value: product.id,
@@ -99,10 +107,12 @@ export function ProductLineDialog({
       const priceNumber = price === "" ? null : Number(price);
       if (isEdit && productLine) {
         await updateProductLine(invoiceId, productLine.id, {
+          ...(allowReplace && { product: productId }),
           quantity: parsedQuantity,
           price_charged: priceNumber,
+          ...(reason && { reason }),
         });
-        toast.success("Product updated.");
+        toast.success(allowReplace ? "Product line replaced." : "Product updated.");
       } else {
         await addProductLine(invoiceId, {
           product: productId,
@@ -128,9 +138,13 @@ export function ProductLineDialog({
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit product" : "Add a product"}</DialogTitle>
+          <DialogTitle>{allowReplace ? "Replace product" : isEdit ? "Edit product" : "Add a product"}</DialogTitle>
           <DialogDescription>
-            {isEdit ? "Update this line's quantity or price." : "Search for a product to add to this invoice."}
+            {allowReplace
+              ? "Change which product this line is for."
+              : isEdit
+                ? "Update this line's quantity or price."
+                : "Search for a product to add to this invoice."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -145,7 +159,7 @@ export function ProductLineDialog({
                 setProductId(value);
                 setPriceEdited(false);
               }}
-              disabled={isEdit}
+              disabled={productLocked}
               placeholder="Search products..."
               searchPlaceholder="Search products..."
             />
@@ -186,7 +200,7 @@ export function ProductLineDialog({
           <ErrorBanner message={error} />
           <DialogFooter>
             <Button type="submit" disabled={!isValid || isSubmitting}>
-              {isSubmitting ? "Saving..." : isEdit ? "Save changes" : "Add product"}
+              {isSubmitting ? "Saving..." : allowReplace ? "Replace" : isEdit ? "Save changes" : "Add product"}
             </Button>
           </DialogFooter>
         </form>

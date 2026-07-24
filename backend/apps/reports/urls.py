@@ -16,6 +16,7 @@ from apps.reports.views import (
     StockReportView,
     SupplierLedgerReportView,
     TopCustomersReportView,
+    WaivedReportView,
 )
 
 urlpatterns = [
@@ -26,6 +27,7 @@ urlpatterns = [
     path("reports/profit-loss/", ProfitLossReportView.as_view(), name="report-profit-loss"),
     path("reports/stock/", StockReportView.as_view(), name="report-stock"),
     path("reports/due/", DueReportView.as_view(), name="report-due"),
+    path("reports/waived/", WaivedReportView.as_view(), name="report-waived"),
     path("reports/top-customers/", TopCustomersReportView.as_view(), name="report-top-customers"),
     path("reports/payment-delay/", PaymentDelayReportView.as_view(), name="report-payment-delay"),
     path("reports/service-performance/", ServicePerformanceReportView.as_view(), name="report-service-performance"),

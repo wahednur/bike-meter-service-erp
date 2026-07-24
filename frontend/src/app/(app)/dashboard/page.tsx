@@ -2,10 +2,19 @@
 
 import {
   AlertTriangle,
+  Banknote,
   CalendarClock,
+  CalendarDays,
+  CalendarRange,
   FileText,
+  Hourglass,
   PackageX,
   PiggyBank,
+  Receipt,
+  Tags,
+  Target,
+  TrendingDown,
+  TrendingUp,
   UserX,
   Wallet,
   Wrench,
@@ -36,6 +45,13 @@ import type { AdminDashboardSummary } from "@/lib/types";
 // CSS custom properties globals.css already defines per theme.
 function accentColor(index: number): string {
   return `var(--chart-${(index % 5) + 1})`;
+}
+
+// Decimal strings from the API are unsigned except net_profit_today, which
+// can be negative (a loss) - keep the minus sign in front of the currency
+// symbol ("-৳110.00") instead of after it ("৳-110.00").
+function formatBdt(value: string): string {
+  return value.startsWith("-") ? `-৳${value.slice(1)}` : `৳${value}`;
 }
 
 function StatCard({
@@ -80,7 +96,17 @@ function DashboardSkeleton() {
         <Skeleton className="h-4 w-24" />
       </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-        {Array.from({ length: 8 }).map((_, index) => (
+        {Array.from({ length: 6 }).map((_, index) => (
+          <Skeleton key={index} className="h-20 w-full" />
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <Skeleton key={index} className="h-20 w-full" />
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 6 }).map((_, index) => (
           <Skeleton key={index} className="h-20 w-full" />
         ))}
       </div>
@@ -133,53 +159,137 @@ function DashboardContent() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-        <StatCard label="Today's Income" value={`৳${data.today_income}`} icon={Wallet} accentIndex={0} />
         <StatCard
           label="Pending Dues"
           value={`৳${data.pending_dues.total_due}`}
           hint={`${data.pending_dues.invoice_count} invoice(s)`}
           icon={AlertTriangle}
-          accentIndex={1}
+          accentIndex={0}
         />
         <StatCard
           label="Red-Listed Customers"
           value={String(data.red_listed_customers_count)}
           icon={UserX}
-          accentIndex={2}
+          accentIndex={1}
         />
         <StatCard
           label="Low-Stock Products"
           value={String(data.low_stock_products.length)}
           hint={`≤ ${data.low_stock_threshold} units`}
           icon={PackageX}
-          accentIndex={3}
+          accentIndex={2}
         />
         <StatCard
           label="Upcoming Installments"
           value={String(data.upcoming_loan_installments.length)}
           hint={`next ${data.upcoming_days} days`}
           icon={CalendarClock}
-          accentIndex={4}
+          accentIndex={3}
         />
         <StatCard
           label="Today's Invoices Created"
           value={String(data.today_invoice_count)}
           icon={FileText}
-          accentIndex={0}
+          accentIndex={4}
         />
         <StatCard
           label="Today's Total Work Value"
           value={`৳${data.today_total_amount}`}
           icon={Wrench}
-          accentIndex={1}
-        />
-        <StatCard
-          label="Total Income (All Time)"
-          value={`৳${data.total_income_all_time}`}
-          icon={PiggyBank}
-          accentIndex={2}
+          accentIndex={0}
         />
       </div>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold">Income</h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          <StatCard label="Today's Income" value={`৳${data.today_income}`} icon={Wallet} accentIndex={0} />
+          <StatCard
+            label="This Week's Income"
+            value={`৳${data.this_week_income}`}
+            icon={CalendarDays}
+            accentIndex={1}
+          />
+          <StatCard
+            label="This Month's Income"
+            value={`৳${data.this_month_income}`}
+            hint="so far this month"
+            icon={CalendarRange}
+            accentIndex={2}
+          />
+          <StatCard
+            label="Predicted Month Income"
+            value={`৳${data.predicted_month_income}`}
+            hint={
+              data.is_early_month_estimate
+                ? "Early estimate — more data needed"
+                : "based on current daily average"
+            }
+            icon={Target}
+            accentIndex={3}
+          />
+          <StatCard
+            label="Remaining to Reach Prediction"
+            value={`৳${data.income_prediction_gap}`}
+            hint="expected by month-end at current pace"
+            icon={Hourglass}
+            accentIndex={4}
+          />
+          <StatCard
+            label="Total Income (All Time)"
+            value={`৳${data.total_income_all_time}`}
+            icon={PiggyBank}
+            accentIndex={0}
+          />
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold">Expenses</h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          <StatCard
+            label="Today's Expense"
+            value={formatBdt(data.today_expense)}
+            icon={Receipt}
+            accentIndex={3}
+          />
+          <StatCard
+            label="This Week's Expense"
+            value={formatBdt(data.this_week_expense)}
+            icon={CalendarDays}
+            accentIndex={4}
+          />
+          <StatCard
+            label="This Month's Expense"
+            value={formatBdt(data.this_month_expense)}
+            icon={CalendarRange}
+            accentIndex={0}
+          />
+          <StatCard
+            label="Total Expense (All Time)"
+            value={formatBdt(data.total_expense_all_time)}
+            icon={Banknote}
+            accentIndex={1}
+          />
+          <StatCard
+            label="Net Profit Today"
+            value={formatBdt(data.net_profit_today)}
+            icon={data.net_profit_today.startsWith("-") ? TrendingDown : TrendingUp}
+            accentIndex={2}
+          />
+          <StatCard
+            label="Top Expense Category This Month"
+            value={
+              data.top_expense_category_this_month
+                ? formatBdt(data.top_expense_category_this_month.amount)
+                : "—"
+            }
+            hint={data.top_expense_category_this_month?.category_display ?? "No expenses yet"}
+            icon={Tags}
+            accentIndex={3}
+          />
+        </div>
+      </section>
 
       <IncomeTrendChart />
 

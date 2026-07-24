@@ -60,8 +60,6 @@ export default function PublicInvoicePage() {
     );
   }
 
-  const entryBySerial = new Map(invoice.meter_entries.map((entry) => [entry.id, entry.serial_number]));
-
   return (
     <main className="mx-auto max-w-2xl space-y-6 p-6 print:p-0">
       <div className="flex items-start justify-between">
@@ -88,35 +86,6 @@ export default function PublicInvoicePage() {
         </div>
       </div>
 
-      {invoice.meter_entries.length > 0 && (
-        <Section title="Meters">
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Meter</TableHead>
-                  <TableHead>Serial</TableHead>
-                  <TableHead>KM</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoice.meter_entries.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="font-medium">{entry.meter_title}</TableCell>
-                    <TableCell>{entry.serial_number}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {entry.previous_km != null && entry.current_km != null
-                        ? `${entry.previous_km} → ${entry.current_km}`
-                        : "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </Section>
-      )}
-
       {invoice.service_lines.length > 0 && (
         <Section title="Services">
           <div className="rounded-lg border">
@@ -129,15 +98,34 @@ export default function PublicInvoicePage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {invoice.service_lines.map((line) => (
-                  <TableRow key={line.id}>
-                    <TableCell className="font-medium">{line.service_name}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {line.meter_entry ? `Serial ${entryBySerial.get(line.meter_entry) ?? line.meter_entry}` : "—"}
-                    </TableCell>
-                    <TableCell className="text-right">৳{line.price_charged}</TableCell>
-                  </TableRow>
-                ))}
+                {invoice.service_lines.map((line) => {
+                  const entry = line.meter_entry_detail;
+                  return (
+                    <TableRow key={line.id}>
+                      <TableCell className="font-medium">{line.service_name}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {entry ? (
+                          <>
+                            {entry.meter_brand} {entry.meter_model} ({entry.meter_cc}cc)
+                            {entry.previous_km != null && entry.current_km != null && (
+                              <> · {entry.previous_km} → {entry.current_km} km</>
+                            )}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        ৳{line.line_total}
+                        {Number(line.product_price) > 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            (charge ৳{line.price_charged} + part ৳{line.product_price})
+                          </p>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -208,6 +196,12 @@ export default function PublicInvoicePage() {
             <div className="flex items-center justify-between text-destructive">
               <dt>Discount{invoice.discount_note ? ` — ${invoice.discount_note}` : ""}</dt>
               <dd>−৳{invoice.discount_amount}</dd>
+            </div>
+          )}
+          {Number(invoice.waived_amount) > 0 && (
+            <div className="flex items-center justify-between rounded-md bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-400">
+              <dt className="font-medium">Waived{invoice.waived_note ? ` — ${invoice.waived_note}` : ""}</dt>
+              <dd className="font-medium">−৳{invoice.waived_amount}</dd>
             </div>
           )}
           <div className="flex items-center justify-between border-t pt-2 text-base font-semibold">

@@ -1,7 +1,7 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +17,7 @@ from apps.invoices.serializers import (
     AddProductLineInputSerializer,
     AddServiceLineInputSerializer,
     ApplyDiscountInputSerializer,
+    ForceCloseInvoiceInputSerializer,
     InvoiceDetailSerializer,
     InvoiceMeterEntrySerializer,
     InvoicePaymentSerializer,
@@ -24,10 +25,24 @@ from apps.invoices.serializers import (
     InvoiceSerializer,
     InvoiceServiceLineSerializer,
     PublicInvoiceDetailSerializer,
+    ReasonInputSerializer,
     StartInvoiceInputSerializer,
+    UpdateInvoiceCreatedDateInputSerializer,
+    UpdatePaymentInputSerializer,
     UpdateProductLineInputSerializer,
     UpdateServiceLineInputSerializer,
 )
+
+
+def _require_admin_for_forced_edit(request, invoice):
+    """Rule 14: editing/deleting on a Paid or force-closed invoice is
+    Admin-only, regardless of the regular add/change permission that
+    otherwise governs this endpoint while the invoice is open. Reuses
+    IsAdmin's own check rather than duplicating the role logic."""
+    if invoice.is_editable:
+        return
+    if not IsAdmin().has_permission(request, None):
+        raise PermissionDenied("Editing a Paid invoice requires Admin.")
 
 
 class InvoiceViewSet(
@@ -114,7 +129,9 @@ class InvoiceViewSet(
         `meter` + serial_number/condition_note/previous_km/current_km/
         mileage_correction_device instead of a pre-existing `meter_entry`,
         and this creates both records together. See
-        AddServiceLineInputSerializer's docstring for the full shape."""
+        AddServiceLineInputSerializer's docstring for the full shape,
+        including the product_used/product_price combination-repair
+        fields."""
         invoice = self.get_object()
         serializer = AddServiceLineInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -128,11 +145,14 @@ class InvoiceViewSet(
         """PATCH /api/invoices/{pk}/service-lines/{line_pk}/ - not a DRF
         @action (needs a second id in the URL, which the @action/router
         machinery doesn't support), so it's wired up directly in urls.py
-        via InvoiceViewSet.as_view({...})."""
+        via InvoiceViewSet.as_view({...}). Also doubles as the "replace"
+        endpoint (pass `service` to swap which service this line bills)
+        and, with a `reason`, the Admin-only path to edit a Paid invoice."""
         invoice = self.get_object()
         line = get_object_or_404(InvoiceServiceLine, pk=line_pk, invoice=invoice)
         serializer = UpdateServiceLineInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        _require_admin_for_forced_edit(request, invoice)
         try:
             invoice_services.update_service_line(invoice, line, user=request.user, **serializer.validated_data)
         except InvoiceError as exc:
@@ -145,8 +165,11 @@ class InvoiceViewSet(
         update_service_line() above for why this isn't a DRF @action."""
         invoice = self.get_object()
         line = get_object_or_404(InvoiceServiceLine, pk=line_pk, invoice=invoice)
+        serializer = ReasonInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        _require_admin_for_forced_edit(request, invoice)
         try:
-            invoice_services.delete_service_line(invoice, line, user=request.user)
+            invoice_services.delete_service_line(invoice, line, user=request.user, **serializer.validated_data)
         except InvoiceError as exc:
             raise ValidationError(str(exc))
         return Response(status=204)
@@ -164,11 +187,13 @@ class InvoiceViewSet(
 
     def update_product_line(self, request, pk=None, line_pk=None):
         """PATCH /api/invoices/{pk}/product-lines/{line_pk}/ - see
-        update_service_line() above for why this isn't a DRF @action."""
+        update_service_line() above for why this isn't a DRF @action; same
+        "replace" (pass `product`) and Admin-only forced-edit support."""
         invoice = self.get_object()
         line = get_object_or_404(InvoiceProductLine, pk=line_pk, invoice=invoice)
         serializer = UpdateProductLineInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        _require_admin_for_forced_edit(request, invoice)
         try:
             invoice_services.update_product_line(invoice, line, user=request.user, **serializer.validated_data)
         except InvoiceError as exc:
@@ -181,8 +206,11 @@ class InvoiceViewSet(
         update_service_line() above for why this isn't a DRF @action."""
         invoice = self.get_object()
         line = get_object_or_404(InvoiceProductLine, pk=line_pk, invoice=invoice)
+        serializer = ReasonInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        _require_admin_for_forced_edit(request, invoice)
         try:
-            invoice_services.delete_product_line(invoice, line, user=request.user)
+            invoice_services.delete_product_line(invoice, line, user=request.user, **serializer.validated_data)
         except InvoiceError as exc:
             raise ValidationError(str(exc))
         return Response(status=204)
@@ -197,6 +225,37 @@ class InvoiceViewSet(
         except InvoiceError as exc:
             raise ValidationError(str(exc))
         return Response(InvoicePaymentSerializer(payment).data, status=201)
+
+    def update_payment(self, request, pk=None, payment_pk=None):
+        """PATCH /api/invoices/{pk}/payments/{payment_pk}/ - correcting a
+        payment, mainly meant for the Admin-only Paid-invoice path (rule 14,
+        `reason` required in that case). Not a DRF @action - see
+        update_service_line() above."""
+        invoice = self.get_object()
+        payment = get_object_or_404(InvoicePayment, pk=payment_pk, invoice=invoice)
+        serializer = UpdatePaymentInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        _require_admin_for_forced_edit(request, invoice)
+        try:
+            invoice_services.update_payment(invoice, payment, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        payment.refresh_from_db()
+        return Response(InvoicePaymentSerializer(payment).data)
+
+    def destroy_payment(self, request, pk=None, payment_pk=None):
+        """DELETE /api/invoices/{pk}/payments/{payment_pk}/ - see
+        update_payment() above."""
+        invoice = self.get_object()
+        payment = get_object_or_404(InvoicePayment, pk=payment_pk, invoice=invoice)
+        serializer = ReasonInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        _require_admin_for_forced_edit(request, invoice)
+        try:
+            invoice_services.delete_payment(invoice, payment, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        return Response(status=204)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -216,6 +275,35 @@ class InvoiceViewSet(
         serializer.is_valid(raise_exception=True)
         try:
             invoice_services.apply_discount(invoice, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        return Response(InvoiceDetailSerializer(invoice).data)
+
+    @action(detail=True, methods=["post"], url_path="force-close", permission_classes=[IsAdmin])
+    def force_close(self, request, pk=None):
+        """Rule 11: Admin-only "accept the remaining balance as final"
+        write-off. Records the waived amount separately from any discount
+        and marks the invoice Paid - see
+        apps.invoices.services.force_close_invoice()."""
+        invoice = self.get_object()
+        serializer = ForceCloseInvoiceInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            invoice_services.force_close_invoice(invoice, user=request.user, **serializer.validated_data)
+        except InvoiceError as exc:
+            raise ValidationError(str(exc))
+        return Response(InvoiceDetailSerializer(invoice).data)
+
+    @action(detail=True, methods=["post"], url_path="created-date", permission_classes=[IsAdmin])
+    def update_created_date(self, request, pk=None):
+        """Rule 3: Admin-only edit of created_date, audit-logged with the
+        old/new value. `reason` is required if the invoice is Paid/
+        force-closed (rule 14)."""
+        invoice = self.get_object()
+        serializer = UpdateInvoiceCreatedDateInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            invoice_services.update_invoice_created_date(invoice, user=request.user, **serializer.validated_data)
         except InvoiceError as exc:
             raise ValidationError(str(exc))
         return Response(InvoiceDetailSerializer(invoice).data)

@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
 from django.utils import timezone
@@ -27,14 +29,23 @@ class Invoice(BaseModel):
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.UNPAID)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
-    created_date = models.DateField(auto_now_add=True)
+    # Defaults to today but editable - Admin only, see
+    # apps.invoices.services.update_invoice_created_date() - e.g. to
+    # backdate an invoice entered a day late.
+    created_date = models.DateField(default=date.today)
     public_share_token = models.CharField(max_length=16, unique=True, editable=False)
 
     # Fixed BDT amount (never a percentage), applied at the invoice level -
     # not per line item. Admin-only, see apps.invoices.services.apply_discount().
-    # total_amount is computed as (services + products) - discount_amount.
+    # total_amount is computed as (services + products) - discount_amount - waived_amount.
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, editable=False)
     discount_note = models.TextField(blank=True, editable=False)
+
+    # A deliberately accepted shortfall at closing time (rule 11/force_close_invoice()) -
+    # distinct from discount_amount, which is a reduction given upfront. Only
+    # ever set once, by force_close_invoice(); never user-editable directly.
+    waived_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, editable=False)
+    waived_note = models.TextField(blank=True, editable=False)
 
     # Sticky flag: set True the first time this invoice is ever seen in
     # PARTIAL status (i.e. some meter/service on it received less than its
@@ -79,7 +90,7 @@ class InvoiceMeterEntry(BaseModel):
 
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="meter_entries")
     meter = models.ForeignKey(Meter, on_delete=models.PROTECT, related_name="invoice_entries")
-    serial_number = models.CharField(max_length=100)
+    serial_number = models.CharField(max_length=100, blank=True, null=True)
     condition_note = models.TextField(blank=True)
     previous_km = models.PositiveIntegerField(null=True, blank=True)
     current_km = models.PositiveIntegerField(null=True, blank=True)
@@ -114,15 +125,30 @@ class InvoiceServiceLine(BaseModel):
         related_name="service_lines",
     )
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name="invoice_lines")
+    # The labor/service portion of this line's charge.
     price_charged = models.DecimalField(max_digits=10, decimal_places=2)
+
+    # Combination repairs (e.g. Display Repair - polarizer paper only vs a
+    # full panel swap) bill a part alongside the labor. Kept as two
+    # independent, independently-editable amounts rather than folded into
+    # price_charged, so the shop can see/adjust labor and parts separately.
+    # product_used is optional - most service lines have neither.
+    product_used = models.ForeignKey(
+        Product, on_delete=models.PROTECT, null=True, blank=True, related_name="invoice_service_lines",
+    )
+    product_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     # Opt-in: which shop tool/accessory (e.g. a soldering iron) was used to
     # perform this repair, if the shop owner bothered to tag it. Not every
     # service names one - see apps.assets.services.compute_asset_stats(),
     # which treats zero tagged lines as "not yet linked", not "worthless".
     asset_used = models.ForeignKey(
-        Asset, on_delete=models.PROTECT, null=True, blank=True, related_name="invoice_service_lines",
+        Asset, on_delete=models.PROTECT, null=True, blank=True, related_name="invoice_service_lines_as_tool",
     )
+
+    # When the work was actually done - independent of created_at (when
+    # this row was entered) or the invoice's own created_date.
+    added_date = models.DateField(default=date.today)
 
     class Meta:
         ordering = ["created_at"]
@@ -130,12 +156,20 @@ class InvoiceServiceLine(BaseModel):
     def __str__(self):
         return f"{self.service.name} on {self.invoice.invoice_no}"
 
+    @property
+    def line_total(self):
+        return self.price_charged + self.product_price
+
 
 class InvoiceProductLine(BaseModel):
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="product_lines")
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="invoice_lines")
     quantity = models.PositiveIntegerField(default=1)
     price_charged = models.DecimalField(max_digits=10, decimal_places=2)
+
+    # When the product was actually sold - independent of created_at or the
+    # invoice's own created_date. Defaults to today, editable.
+    added_date = models.DateField(default=date.today)
 
     class Meta:
         ordering = ["created_at"]

@@ -42,8 +42,8 @@ class Service(BaseModel):
 
     @property
     def requires_mileage_correction_fields(self):
-        """Business rule, not yet enforced anywhere: when this service is
-        added to an invoice, previous_km, current_km, and
-        meter_condition_note become required. Actual enforcement happens in
-        the Invoice app once it exists - this flag is what it will check."""
+        """When this service is added to an invoice, meter_condition_note
+        becomes required (previous_km/current_km stay optional). Enforced
+        by ServiceSerializer.validate_invoice_line_fields, called from
+        apps.invoices.services."""
         return self.category.name == ServiceCategory.Name.MILEAGE_CORRECTION

@@ -61,6 +61,10 @@ export interface CustomerLedgerInvoice {
   total_amount: string;
   paid_amount: string;
   outstanding_amount: string;
+  // Force-close write-off (see Invoice.waived_amount) - separate from a
+  // discount, so it's shown on its own in the ledger too.
+  waived_amount: string;
+  waived_note: string;
 }
 
 export interface CustomerLedger {
@@ -257,7 +261,7 @@ export interface ProductItem {
 
 export interface ProductPayload {
   name: string;
-  sku: string;
+  sku?: string;
   supplier: number;
   sale_price: number;
   description?: string;
@@ -321,7 +325,11 @@ export interface InvoiceMeterEntry {
   invoice: number;
   meter: number;
   meter_title: string;
-  serial_number: string;
+  meter_brand: string;
+  meter_model: string;
+  meter_cc: number;
+  // Optional - a meter entry can be recorded without one.
+  serial_number: string | null;
   condition_note: string;
   previous_km: number | null;
   current_km: number | null;
@@ -340,15 +348,25 @@ export interface InvoiceServiceLine {
   id: number;
   invoice: number;
   meter_entry: number | null;
-  // Full nested entry, not just the id - the merged add-service endpoint
-  // may have just created it inline. Null when this line has no linked
+  // Full nested entry, not just the id - this is the only place a
+  // mileage-correction line's meter shows up; there is no separate
+  // top-level meter list anywhere. Null when this line has no linked
   // meter entry (a regular repair service with nothing to attach to).
   meter_entry_detail: InvoiceMeterEntry | null;
   service: number;
   service_name: string;
+  // The labor/service portion of the charge.
   price_charged: string;
+  // Combination-repair part (e.g. Display Repair's polarizer paper vs a
+  // full panel swap) - independent of price_charged, never combined.
+  product_used: number | null;
+  product_used_name: string | null;
+  product_price: string;
+  line_total: string;
   asset_used: number | null;
   asset_used_name: string | null;
+  // When the work was actually done - independent of created_at.
+  added_date: string;
   created_at: string;
   updated_at: string;
   created_by: number | null;
@@ -362,6 +380,8 @@ export interface InvoiceProductLine {
   quantity: number;
   price_charged: string;
   line_total: string;
+  // When the product was actually sold - independent of created_at.
+  added_date: string;
   created_at: string;
   updated_at: string;
   created_by: number | null;
@@ -425,6 +445,10 @@ export interface Invoice {
   due_amount: string;
   discount_amount: string;
   discount_note: string;
+  // Force-close write-off (rule 11) - kept separate from discount_amount.
+  waived_amount: string;
+  waived_note: string;
+  // Editable (Admin only) - see updateInvoiceCreatedDate().
   created_date: string;
   public_share_token: string;
   created_at: string;
@@ -433,7 +457,8 @@ export interface Invoice {
 }
 
 export interface InvoiceDetail extends Invoice {
-  meter_entries: InvoiceMeterEntry[];
+  // No top-level meter list - a Mileage Correction line's meter lives
+  // entirely inside its service_lines entry (meter_entry_detail).
   service_lines: InvoiceServiceLine[];
   product_lines: InvoiceProductLine[];
   payments: InvoicePayment[];
@@ -441,9 +466,10 @@ export interface InvoiceDetail extends Invoice {
 }
 
 /** GET /api/public/invoices/{token}/ - no auth. Same as InvoiceDetail, but
- * meter_entries never carry mileage_correction_device*, and it carries
- * shop branding for the page/footer since the public page can't call the
- * (Staff/Admin-only) shop-profile endpoint itself. */
+ * a mileage-correction line's meter_entry_detail never carries
+ * mileage_correction_device*, and it carries shop branding for the page/
+ * footer since the public page can't call the (Staff/Admin-only)
+ * shop-profile endpoint itself. */
 export interface PublicInvoiceDetail extends InvoiceDetail {
   shop_name: string;
   invoice_footer_text: string;
@@ -459,12 +485,17 @@ export interface InvoiceListFilters {
 /** POST /api/invoices/{id}/service-lines/ - the merged endpoint. For a
  * Mileage Correction service, include `meter` + the usual meter-entry
  * fields instead of a pre-existing `meter_entry` id - the server creates
- * the InvoiceMeterEntry and this line together in one call. */
+ * the InvoiceMeterEntry and this line together in one call.
+ * `product_used`/`product_price` are for combination repairs - two
+ * independent amounts, never folded into price_charged. */
 export interface AddServiceLinePayload {
   service: number;
   meter_entry?: number | null;
   price_charged?: number | null;
+  product_used?: number | null;
+  product_price?: number | null;
   asset_used?: number | null;
+  added_date?: string | null;
   meter?: number | null;
   serial_number?: string;
   condition_note?: string;
@@ -475,31 +506,64 @@ export interface AddServiceLinePayload {
 
 /** PATCH /api/invoices/{id}/service-lines/{lineId}/ - every field is
  * optional; omit a key entirely (don't send it as undefined/null) to leave
- * that field untouched on the line/its linked meter entry. `service` and
- * `meter` themselves can't be changed this way - only the meter entry's
- * own fields (serial_number/condition_note/previous_km/current_km/
- * mileage_correction_device), the price, and asset_used. */
+ * that field untouched on the line/its linked meter entry. `service` lets
+ * the line be fully replaced (swap which service it bills) without a
+ * delete+recreate - pass `meter` (+ the meter-entry fields) in the same
+ * request if swapping to Mileage Correction and the line doesn't already
+ * have a meter entry. `reason` is required only if the invoice is Paid/
+ * force-closed (Admin only in that case). */
 export interface UpdateServiceLinePayload {
+  service?: number;
+  meter?: number | null;
   price_charged?: number | null;
+  product_used?: number | null;
+  product_price?: number | null;
   asset_used?: number | null;
+  added_date?: string;
   serial_number?: string;
   condition_note?: string;
   previous_km?: number | null;
   current_km?: number | null;
   mileage_correction_device?: number | null;
+  reason?: string;
 }
 
 export interface AddProductLinePayload {
   product: number;
   quantity: number;
   price_charged?: number | null;
+  added_date?: string | null;
 }
 
-/** PATCH /api/invoices/{id}/product-lines/{lineId}/ - `product` can't be
- * changed; only quantity and price_charged. */
+/** PATCH /api/invoices/{id}/product-lines/{lineId}/ - `product` lets the
+ * line be fully replaced (rule 8) without a delete+recreate. `reason` is
+ * required only if the invoice is Paid/force-closed. */
 export interface UpdateProductLinePayload {
+  product?: number;
   quantity?: number;
   price_charged?: number | null;
+  added_date?: string;
+  reason?: string;
+}
+
+/** Body accepted by DELETE on a service/product line - only meaningful
+ * (and only required) when the invoice is no longer in its normal
+ * editable state (Paid/force-closed). */
+export interface DeleteLinePayload {
+  reason?: string;
+}
+
+/** POST /api/invoices/{id}/force-close/ - Admin only. `note` is
+ * mandatory: explains why the remaining balance is being written off. */
+export interface ForceCloseInvoicePayload {
+  note: string;
+}
+
+/** POST /api/invoices/{id}/created-date/ - Admin only. `reason` is
+ * required only if the invoice is Paid/force-closed. */
+export interface UpdateInvoiceCreatedDatePayload {
+  created_date: string;
+  reason?: string;
 }
 
 export interface PendingDues {
@@ -522,6 +586,12 @@ export interface UpcomingInstallment {
   installment_amount: string;
 }
 
+export interface TopExpenseCategory {
+  category: string;
+  category_display: string;
+  amount: string;
+}
+
 export interface AdminDashboardSummary {
   date: string;
   today_income: string;
@@ -534,6 +604,17 @@ export interface AdminDashboardSummary {
   low_stock_threshold: number;
   upcoming_loan_installments: UpcomingInstallment[];
   upcoming_days: number;
+  today_expense: string;
+  this_week_expense: string;
+  this_month_expense: string;
+  total_expense_all_time: string;
+  net_profit_today: string;
+  top_expense_category_this_month: TopExpenseCategory | null;
+  this_week_income: string;
+  this_month_income: string;
+  predicted_month_income: string;
+  income_prediction_gap: string;
+  is_early_month_estimate: boolean;
 }
 
 export interface IncomeReportRow {

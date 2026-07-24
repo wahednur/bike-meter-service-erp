@@ -24,10 +24,14 @@ export function DatePickerButton({
   value,
   onChange,
   placeholder = "Pick a date",
+  className,
+  size,
 }: {
   value: string | undefined;
   onChange: (value: string | undefined) => void;
   placeholder?: string;
+  className?: string;
+  size?: "sm" | "default";
 }) {
   const [open, setOpen] = useState(false);
   const selected = value ? fromDateKey(value) : undefined;
@@ -35,7 +39,7 @@ export function DatePickerButton({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" className="justify-between font-normal">
+        <Button type="button" variant="outline" size={size} className={cn("justify-between font-normal", className)}>
           <span className={cn("flex items-center gap-2", !selected && "text-muted-foreground")}>
             <CalendarIcon className="h-4 w-4" />
             {selected ? selected.toLocaleDateString() : placeholder}

@@ -159,8 +159,10 @@ export default function ProductsPage() {
                         </Link>
                       </TableCell>
                       <TableCell>
-                        <Link href={`/products/${product.id}`} className="block text-muted-foreground">
-                          {product.sku}
+                        <Link href={`/products/${product.id}`} className="block">
+                          <Badge variant="outline" className="font-mono">
+                            {product.sku}
+                          </Badge>
                         </Link>
                       </TableCell>
                       <TableCell>

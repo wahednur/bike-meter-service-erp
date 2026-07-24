@@ -338,6 +338,41 @@ def due_report(from_date=None, to_date=None):
     return {"rows": rows, "invoice_count": len(rows), "total_due": total_due}
 
 
+# --- Waived Amount Report (rule 13) ---------------------------------------------
+
+def waived_report(from_date=None, to_date=None):
+    """Every invoice with a waived_amount (force-closed as Paid despite a
+    remaining balance - see apps.invoices.services.force_close_invoice(),
+    rule 11), grouped by customer, so the shop owner can see total revenue
+    accepted as a shortfall over time - separate from legitimate discounts,
+    which never show up here."""
+    from apps.invoices.models import Invoice
+
+    invoices = Invoice.objects.filter(waived_amount__gt=0).select_related("customer")
+    if from_date:
+        invoices = invoices.filter(created_date__gte=from_date)
+    if to_date:
+        invoices = invoices.filter(created_date__lte=to_date)
+
+    grouped = (
+        invoices.values("customer_id", "customer__name")
+        .annotate(invoice_count=Count("id"), total_waived_amount=Sum("waived_amount"))
+        .order_by("-total_waived_amount")
+    )
+
+    rows = [
+        {
+            "customer_id": row["customer_id"],
+            "customer_name": row["customer__name"],
+            "invoice_count": row["invoice_count"],
+            "total_waived_amount": row["total_waived_amount"],
+        }
+        for row in grouped
+    ]
+    total_waived_amount = sum((row["total_waived_amount"] for row in rows), Decimal("0"))
+    return {"rows": rows, "customer_count": len(rows), "total_waived_amount": total_waived_amount}
+
+
 # --- Top Customers Report ------------------------------------------------------
 
 TOP_CUSTOMERS_SORT_FIELDS = {
@@ -623,6 +658,30 @@ def dashboard_summary(from_date=None, to_date=None):
     }
 
 
+def project_month_income(this_month_income, days_elapsed, days_in_month):
+    """Simple run-rate projection, not a "real" forecasting model -
+    deliberately transparent so the shop owner can see exactly how the
+    number was derived: assumes the rest of the month continues at the
+    same average daily pace seen so far.
+
+    Worked example: 10 days into a 30-day month, ৳5,000 received so far:
+        predicted_month_income = (5000 / 10) * 30 = 15,000.00
+        income_prediction_gap  = 15,000 - 5,000   = 10,000.00
+
+    `days_elapsed` must be >=1 (guaranteed by admin_dashboard_summary()
+    passing today.day, which is always 1..31) - never divides by zero,
+    even on the 1st of the month. `is_early_month_estimate` flags fewer
+    than 5 days of data as too thin to trust as a solid number.
+    """
+    this_month_income = Decimal(this_month_income)
+    predicted_month_income = ((this_month_income / days_elapsed) * days_in_month).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP,
+    )
+    income_prediction_gap = predicted_month_income - this_month_income
+    is_early_month_estimate = days_elapsed < 5
+    return predicted_month_income, income_prediction_gap, is_early_month_estimate
+
+
 # --- Admin dashboard: today's operational snapshot ------------------------------
 
 def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
@@ -631,9 +690,11 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
     operational snapshot - today's income, pending dues, red-listed
     customers, low stock, and installments coming due soon. Not
     date-range-filterable, since "today" and "upcoming" are the point."""
+    import calendar
     import datetime
 
     from apps.customers.models import Customer
+    from apps.expenses.models import Expense
     from apps.invoices.models import Invoice
     from apps.loans import services as loan_services
     from apps.products import services as product_services
@@ -667,6 +728,50 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
 
     upcoming = loan_services.upcoming_installments(within_days=upcoming_days, reference_date=today)
 
+    # Manual operating expenses only (apps.expenses.Expense - rent,
+    # electricity, transport, misc) - NOT the broader restock/asset/device
+    # "expenses" definition expense_report() uses.
+    week_start = today - datetime.timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+
+    today_expense = Expense.objects.filter(date=today).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+    this_week_expense = (
+        Expense.objects.filter(date__gte=week_start, date__lte=today).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0")
+    )
+    this_month_expense = (
+        Expense.objects.filter(date__gte=month_start, date__lte=today).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0")
+    )
+    total_expense_all_time = Expense.objects.aggregate(total=Sum("amount"))["total"] or Decimal("0")
+
+    top_category_row = (
+        Expense.objects.filter(date__gte=month_start, date__lte=today)
+        .values("category")
+        .annotate(total=Sum("amount"))
+        .order_by("-total")
+        .first()
+    )
+    top_expense_category_this_month = (
+        {
+            "category": top_category_row["category"],
+            "category_display": Expense.Category(top_category_row["category"]).label,
+            "amount": top_category_row["total"],
+        }
+        if top_category_row
+        else None
+    )
+
+    this_week_income = income_report("total", from_date=week_start, to_date=today)["total_income"]
+    this_month_income = income_report("total", from_date=month_start, to_date=today)["total_income"]
+
+    days_elapsed = today.day  # 1..31, always >=1 - month_start to today inclusive, so never divides by zero
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+
+    predicted_month_income, income_prediction_gap, is_early_month_estimate = project_month_income(
+        this_month_income, days_elapsed, days_in_month,
+    )
+
     return {
         "date": today,
         "today_income": today_income_data["total_income"],
@@ -679,4 +784,15 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
         "low_stock_threshold": low_stock_threshold,
         "upcoming_loan_installments": upcoming,
         "upcoming_days": upcoming_days,
+        "today_expense": today_expense,
+        "this_week_expense": this_week_expense,
+        "this_month_expense": this_month_expense,
+        "total_expense_all_time": total_expense_all_time,
+        "net_profit_today": today_income_data["total_income"] - today_expense,
+        "top_expense_category_this_month": top_expense_category_this_month,
+        "this_week_income": this_week_income,
+        "this_month_income": this_month_income,
+        "predicted_month_income": predicted_month_income,
+        "income_prediction_gap": income_prediction_gap,
+        "is_early_month_estimate": is_early_month_estimate,
     }

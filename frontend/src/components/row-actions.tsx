@@ -31,11 +31,16 @@ import { ApiError } from "@/lib/api";
 export function RowActions({
   resourceLabel,
   onEdit,
+  onReplace,
   onDelete,
   deleteDescription,
 }: {
   resourceLabel: string;
   onEdit: () => void;
+  /** Optional - shows a second "Replace" item (e.g. "change which service/
+   * product/meter this line is for") between Edit and Delete. Omit for the
+   * plain Edit/Delete pattern used everywhere else. */
+  onReplace?: () => void;
   onDelete: () => Promise<unknown>;
   deleteDescription?: string;
 }) {
@@ -71,6 +76,7 @@ export function RowActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
           <DropdownMenuItem onSelect={() => onEdit()}>Edit</DropdownMenuItem>
+          {onReplace && <DropdownMenuItem onSelect={() => onReplace()}>Replace</DropdownMenuItem>}
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirmOpen(true)}>
             Delete
           </DropdownMenuItem>

@@ -26,6 +26,11 @@ class CustomerLedgerInvoiceSerializer(serializers.Serializer):
     total_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     paid_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     outstanding_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    # Force-close write-off (apps.invoices.services.force_close_invoice) -
+    # surfaced here so the customer ledger shows waived amounts, not just
+    # discounts, per invoice.
+    waived_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    waived_note = serializers.CharField()
 
 
 class CustomerLedgerSerializer(serializers.Serializer):

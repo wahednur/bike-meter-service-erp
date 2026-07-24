@@ -23,6 +23,7 @@ from apps.reports.serializers import (
     ServicePerformanceReportSerializer,
     StockReportSerializer,
     TopCustomersReportSerializer,
+    WaivedReportSerializer,
 )
 from apps.reports.utils import get_date_range
 from apps.suppliers import services as supplier_services
@@ -93,6 +94,17 @@ class DueReportView(BaseReportView):
         from_date, to_date = get_date_range(request)
         data = report_services.due_report(from_date, to_date)
         return Response(DueReportSerializer(data).data)
+
+
+class WaivedReportView(BaseReportView):
+    """Rule 13: total waived_amount (force-close write-offs) across
+    customers over a date range - separate from the discount totals
+    already visible on individual invoices."""
+
+    def get(self, request):
+        from_date, to_date = get_date_range(request)
+        data = report_services.waived_report(from_date, to_date)
+        return Response(WaivedReportSerializer(data).data)
 
 
 class TopCustomersReportView(BaseReportView):

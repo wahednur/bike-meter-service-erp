@@ -25,29 +25,23 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     @staticmethod
     def validate_invoice_line_fields(service, previous_km, current_km, meter_condition_note):
-        """Business rule, not yet wired to anything: if `service`'s category
-        is Mileage Correction, previous_km, current_km, and
-        meter_condition_note are all required on the invoice line item.
-
-        Once the Invoice app exists, invoice line-item creation will call
-        this before allowing the line item to be saved.
+        """Business rule: if `service`'s category is Mileage Correction,
+        meter_condition_note is required on the invoice line item.
+        previous_km/current_km are optional (some jobs don't have this info
+        available at entry time) - but if both are given, previous_km must
+        be >= current_km (a correction rolls an inflated odometer reading
+        back down, never up).
         """
         if not service.requires_mileage_correction_fields:
             return
 
-        missing = [
-            field_name
-            for field_name, value in (
-                ("previous_km", previous_km),
-                ("current_km", current_km),
-                ("meter_condition_note", meter_condition_note),
-            )
-            if value in (None, "")
-        ]
-        if missing:
+        if meter_condition_note in (None, ""):
             raise serializers.ValidationError(
-                f"{', '.join(missing)} required for a Mileage Correction service."
+                "meter_condition_note required for a Mileage Correction service."
             )
+
+        if previous_km is not None and current_km is not None and previous_km < current_km:
+            raise serializers.ValidationError("previous_km must be greater than or equal to current_km.")
 
 
 class ServiceListSerializer(ServiceSerializer):

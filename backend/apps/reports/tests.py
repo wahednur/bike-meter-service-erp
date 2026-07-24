@@ -1,11 +1,13 @@
+import calendar
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from apps.assets.models import Asset, AssetIncident
 from apps.customers.models import Customer
+from apps.expenses.models import Expense
 from apps.invoices import services as invoice_services
 from apps.invoices.models import Invoice
 from apps.loans import services as loan_services
@@ -224,6 +226,15 @@ class ReportServiceTests(TestCase):
             installment_frequency=Loan.InstallmentFrequency.WEEKLY, start_date=timezone.now().date(),
         )
 
+        today = timezone.now().date()
+        Expense.objects.create(category=Expense.Category.RENT, amount=Decimal("5000.00"), date=today)
+        Expense.objects.create(category=Expense.Category.ELECTRICITY, amount=Decimal("1200.00"), date=today)
+        # 45 days always falls outside the current week AND month, regardless
+        # of which real-world day this suite happens to run on.
+        Expense.objects.create(
+            category=Expense.Category.MISC, amount=Decimal("9999.00"), date=today - timedelta(days=45),
+        )
+
         data = report_services.admin_dashboard_summary(low_stock_threshold=5, upcoming_days=10)
 
         self.assertEqual(data["today_income"], Decimal("100.00"))
@@ -234,6 +245,30 @@ class ReportServiceTests(TestCase):
         self.assertGreaterEqual(data["red_listed_customers_count"], 1)
         self.assertTrue(any(p["sku"] == "LOWSTOCK-1" for p in data["low_stock_products"]))
         self.assertEqual(len(data["upcoming_loan_installments"]), 1)
+
+        # Manual-expense fields (apps.expenses.Expense only) and net profit.
+        self.assertEqual(data["today_expense"], Decimal("6200.00"))  # rent + electricity
+        self.assertEqual(data["this_week_expense"], Decimal("6200.00"))  # 45-day-old misc excluded
+        self.assertEqual(data["this_month_expense"], Decimal("6200.00"))  # 45-day-old misc excluded
+        self.assertEqual(data["total_expense_all_time"], Decimal("16199.00"))  # + the 45-day-old misc
+        self.assertEqual(data["net_profit_today"], Decimal("100.00") - Decimal("6200.00"))
+
+        # Income run-rate projection fields - the only payment made anywhere
+        # in this test is today's ৳100.00, so it's unambiguously this week's
+        # AND this month's income too, regardless of what day this suite
+        # happens to run on.
+        self.assertEqual(data["this_week_income"], Decimal("100.00"))
+        self.assertEqual(data["this_month_income"], Decimal("100.00"))
+        days_elapsed = today.day
+        days_in_month = calendar.monthrange(today.year, today.month)[1]
+        expected_prediction = ((Decimal("100.00") / days_elapsed) * days_in_month).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP,
+        )
+        self.assertEqual(data["predicted_month_income"], expected_prediction)
+        self.assertEqual(data["income_prediction_gap"], expected_prediction - Decimal("100.00"))
+        self.assertEqual(data["is_early_month_estimate"], days_elapsed < 5)
+        self.assertEqual(data["top_expense_category_this_month"]["category"], Expense.Category.RENT)
+        self.assertEqual(data["top_expense_category_this_month"]["amount"], Decimal("5000.00"))
 
     # --- top customers report ---------------------------------------------------
 
@@ -347,3 +382,96 @@ class ReportServiceTests(TestCase):
             from_date=date(2026, 1, 1), to_date=date(2026, 12, 31),
         )
         self.assertEqual(data["rows"], [])
+
+    # --- waived report (rule 13) ---------------------------------------------
+
+    def test_waived_report_totals_force_closed_invoices_by_customer(self):
+        customer2 = Customer.objects.create(name="Rahim Traders", phone="01710000011")
+
+        invoice1, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice1, self.service, price_charged=Decimal("1000.00"))
+        invoice_services.add_payment(invoice1, amount=Decimal("700.00"), payment_method="CASH")
+        invoice1.refresh_from_db()
+        invoice_services.force_close_invoice(invoice1, note="accepted shortfall 1")
+
+        invoice2, _ = invoice_services.get_or_create_open_invoice(customer2)
+        invoice_services.add_service_line(invoice2, self.service, price_charged=Decimal("500.00"))
+        invoice_services.add_payment(invoice2, amount=Decimal("100.00"), payment_method="CASH")
+        invoice2.refresh_from_db()
+        invoice_services.force_close_invoice(invoice2, note="accepted shortfall 2")
+
+        # A normal discount must never show up here.
+        invoice3, _ = invoice_services.get_or_create_open_invoice(Customer.objects.create(name="Jamal", phone="01710000012"))
+        invoice_services.add_service_line(invoice3, self.service, price_charged=Decimal("1000.00"))
+        invoice_services.apply_discount(invoice3, discount_amount=Decimal("100.00"))
+
+        data = report_services.waived_report()
+        self.assertEqual(data["customer_count"], 2)
+        self.assertEqual(data["total_waived_amount"], Decimal("700.00"))  # 300 + 400
+
+        row_by_customer = {row["customer_name"]: row for row in data["rows"]}
+        self.assertEqual(row_by_customer["Karim Motors"]["total_waived_amount"], Decimal("300.00"))
+        self.assertEqual(row_by_customer["Rahim Traders"]["total_waived_amount"], Decimal("400.00"))
+
+    def test_waived_report_filters_by_date_range(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        invoice_services.add_service_line(invoice, self.service, price_charged=Decimal("1000.00"))
+        invoice_services.add_payment(invoice, amount=Decimal("600.00"), payment_method="CASH")
+        invoice.refresh_from_db()
+        invoice_services.force_close_invoice(invoice, note="old shortfall")
+        Invoice.objects.filter(pk=invoice.pk).update(created_date=date(2020, 1, 1))
+
+        data = report_services.waived_report(from_date=date(2026, 1, 1), to_date=date(2026, 12, 31))
+        self.assertEqual(data["rows"], [])
+        self.assertEqual(data["total_waived_amount"], Decimal("0"))
+
+
+class ProjectMonthIncomeTests(SimpleTestCase):
+    """apps.reports.services.project_month_income() - the plain run-rate
+    projection behind the admin dashboard's predicted_month_income /
+    income_prediction_gap / is_early_month_estimate fields. Pure function,
+    no DB access, so exact days-elapsed/days-in-month scenarios (including
+    the 1st-of-the-month edge case) can be tested directly instead of
+    depending on whatever day this suite happens to run on."""
+
+    def test_worked_example_day_10_of_30_day_month(self):
+        predicted, gap, is_early = report_services.project_month_income(
+            this_month_income=Decimal("5000.00"), days_elapsed=10, days_in_month=30,
+        )
+        self.assertEqual(predicted, Decimal("15000.00"))  # (5000 / 10) * 30
+        self.assertEqual(gap, Decimal("10000.00"))  # 15000 - 5000
+        self.assertFalse(is_early)
+
+    def test_first_day_of_month_does_not_divide_by_zero(self):
+        predicted, gap, is_early = report_services.project_month_income(
+            this_month_income=Decimal("500.00"), days_elapsed=1, days_in_month=31,
+        )
+        self.assertEqual(predicted, Decimal("15500.00"))  # (500 / 1) * 31
+        self.assertEqual(gap, Decimal("15000.00"))
+        self.assertTrue(is_early)  # day 1 is well under the 5-day threshold
+
+    def test_is_early_month_estimate_flips_off_at_day_5(self):
+        _, _, is_early_day_4 = report_services.project_month_income(
+            this_month_income=Decimal("400.00"), days_elapsed=4, days_in_month=30,
+        )
+        _, _, is_early_day_5 = report_services.project_month_income(
+            this_month_income=Decimal("500.00"), days_elapsed=5, days_in_month=30,
+        )
+        self.assertTrue(is_early_day_4)
+        self.assertFalse(is_early_day_5)
+
+    def test_zero_income_so_far_predicts_zero_not_an_error(self):
+        predicted, gap, _ = report_services.project_month_income(
+            this_month_income=Decimal("0.00"), days_elapsed=1, days_in_month=28,
+        )
+        self.assertEqual(predicted, Decimal("0.00"))
+        self.assertEqual(gap, Decimal("0.00"))
+
+    def test_rounds_to_two_decimal_places(self):
+        # 1000 / 3 = 333.333... - projected across 30 days should round
+        # half-up to the nearest cent, not truncate or stay unrounded.
+        predicted, gap, _ = report_services.project_month_income(
+            this_month_income=Decimal("1000.00"), days_elapsed=3, days_in_month=30,
+        )
+        self.assertEqual(predicted, Decimal("10000.00"))  # (1000 / 3) * 30 == 10000 exactly
+        self.assertEqual(gap, Decimal("9000.00"))

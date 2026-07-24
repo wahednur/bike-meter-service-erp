@@ -24,6 +24,7 @@ import type {
   InvoiceServiceLine,
   MileageCorrectionDevice,
   Meter,
+  ProductItem,
   ServiceCategory,
   ServiceItem,
 } from "@/lib/types";
@@ -33,17 +34,20 @@ function ErrorBanner({ message }: { message: string | null }) {
   return <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</p>;
 }
 
-/** Add-or-edit dialog for one InvoiceServiceLine. Selecting a Mileage
- * Correction service expands the form to collect a meter + its KM/device
- * details, and creates the InvoiceMeterEntry and this line together in one
- * call (see apps.invoices.services.add_service_line() on the backend) - no
- * separate "add meter" step. Any other category just shows a price field.
+/** Add-or-edit-or-replace dialog for one InvoiceServiceLine. Selecting a
+ * Mileage Correction service expands the form to collect a meter + its
+ * KM/device details, and creates the InvoiceMeterEntry and this line
+ * together in one call (see apps.invoices.services.add_service_line() on
+ * the backend) - no separate "add meter" step. Any other category shows
+ * two independent amounts instead: Service Charge and (for a combination
+ * repair like Display Repair) an optional Product + Product Price.
  *
- * Reused for both adding (pass `trigger`, no `serviceLine`) and editing
- * (pass `serviceLine` + a controlled `open`/`onOpenChange`, no `trigger`) -
- * same pattern as CustomerFormDialog etc. Editing can't change which
- * service or meter a line is for (the API doesn't support that): those
- * fields render disabled, pre-filled from the existing line.
+ * Reused for adding (pass `trigger`, no `serviceLine`), editing (pass
+ * `serviceLine` + a controlled `open`/`onOpenChange`, no `trigger`), and
+ * replacing (same as editing, plus `allowReplace` to unlock the Service
+ * combobox - rule 8's "replace which service/meter this line is for").
+ * `reason` is forwarded to the edit call when reopening a Paid invoice
+ * under the Admin "Edit Paid Invoice" exception.
  */
 export function ServiceLineDialog({
   invoice,
@@ -51,8 +55,11 @@ export function ServiceLineDialog({
   categories,
   meters,
   devices,
+  products,
   assets,
   serviceLine,
+  allowReplace = false,
+  reason,
   trigger,
   open: openProp,
   onOpenChange: onOpenChangeProp,
@@ -63,8 +70,11 @@ export function ServiceLineDialog({
   categories: ServiceCategory[];
   meters: Meter[];
   devices: MileageCorrectionDevice[];
+  products: ProductItem[];
   assets: Asset[];
   serviceLine?: InvoiceServiceLine;
+  allowReplace?: boolean;
+  reason?: string;
   trigger?: ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -84,6 +94,9 @@ export function ServiceLineDialog({
   const [deviceId, setDeviceId] = useState<number | null>(null);
   const [price, setPrice] = useState("");
   const [priceEdited, setPriceEdited] = useState(false);
+  const [productUsedId, setProductUsedId] = useState<number | null>(null);
+  const [productPrice, setProductPrice] = useState("");
+  const [productPriceEdited, setProductPriceEdited] = useState(false);
   const [assetUsedId, setAssetUsedId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,12 +105,21 @@ export function ServiceLineDialog({
   const selectedService = services.find((service) => service.id === serviceId) ?? null;
   const isMileageCorrection = !!selectedService && selectedService.category === mileageCorrectionCategoryId;
   const selectedMeter = meters.find((meter) => meter.id === meterId) ?? null;
+  const selectedProductUsed = products.find((product) => product.id === productUsedId) ?? null;
+
+  // The meter itself can't be changed once a meter entry already exists
+  // (the API has no "swap which physical meter" support) - only its
+  // serial/KM/condition/device fields. The Service combobox unlocks in
+  // replace mode; the meter one only when there's no existing entry yet.
+  const serviceLocked = isEdit && !allowReplace;
+  const meterLocked = isEdit && !!serviceLine?.meter_entry_detail;
 
   const defaultPrice = isMileageCorrection ? selectedMeter?.sales_price : selectedService?.service_price;
+  const defaultProductPrice = selectedProductUsed?.sale_price;
 
   // Pre-fill (or reset) every field whenever the dialog opens, based on
-  // whether we're adding (serviceLine undefined) or editing (its current
-  // values, including its linked meter entry if it has one).
+  // whether we're adding (serviceLine undefined) or editing/replacing
+  // (its current values, including its linked meter entry if it has one).
   useEffect(() => {
     if (!open) return;
     if (serviceLine) {
@@ -111,6 +133,9 @@ export function ServiceLineDialog({
       setDeviceId(entry?.mileage_correction_device ?? null);
       setPrice(serviceLine.price_charged);
       setPriceEdited(true); // don't let the auto-default effect below clobber the loaded price
+      setProductUsedId(serviceLine.product_used);
+      setProductPrice(serviceLine.product_price);
+      setProductPriceEdited(true);
       setAssetUsedId(serviceLine.asset_used);
     } else {
       setServiceId(null);
@@ -122,19 +147,27 @@ export function ServiceLineDialog({
       setDeviceId(null);
       setPrice("");
       setPriceEdited(false);
+      setProductUsedId(null);
+      setProductPrice("");
+      setProductPriceEdited(false);
       setAssetUsedId(null);
     }
     setError(null);
   }, [open, serviceLine]);
 
-  // Keep the price field synced to the meter/service default until the
-  // user actually edits it themselves - never in edit mode, since the
-  // service/meter there are fixed and the price should stay whatever it
-  // already was billed at.
+  // Keep the price fields synced to their catalog defaults until the user
+  // actually edits them themselves - never in plain edit mode (service/
+  // meter/product there are usually fixed and the price should stay
+  // whatever it already was billed at).
   useEffect(() => {
-    if (isEdit || priceEdited) return;
+    if ((isEdit && !allowReplace) || priceEdited) return;
     setPrice(defaultPrice ?? "");
-  }, [isEdit, priceEdited, defaultPrice]);
+  }, [isEdit, allowReplace, priceEdited, defaultPrice]);
+
+  useEffect(() => {
+    if ((isEdit && !allowReplace) || productPriceEdited) return;
+    setProductPrice(defaultProductPrice ?? "0");
+  }, [isEdit, allowReplace, productPriceEdited, defaultProductPrice]);
 
   const serviceOptions: ComboboxOption[] = services.map((service) => ({
     value: service.id,
@@ -154,12 +187,16 @@ export function ServiceLineDialog({
   }, [devices, selectedMeter]);
 
   const assetOptions: ComboboxOption[] = assets.map((asset) => ({ value: asset.id, label: asset.name }));
+  const productOptions: ComboboxOption[] = products.map((product) => ({
+    value: product.id,
+    label: product.name,
+    description: `${product.sku} · ৳${product.sale_price}`,
+  }));
 
   const isValid =
     !!serviceId &&
     price !== "" &&
-    (!isMileageCorrection ||
-      (!!meterId && !!serialNumber.trim() && !!conditionNote.trim() && previousKm !== "" && currentKm !== ""));
+    (!isMileageCorrection || (!!meterId && !!conditionNote.trim()));
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -168,24 +205,32 @@ export function ServiceLineDialog({
     setIsSubmitting(true);
     try {
       const priceNumber = price === "" ? null : Number(price);
+      const productPriceNumber = productPrice === "" ? null : Number(productPrice);
 
       if (isEdit && serviceLine) {
         await updateServiceLine(invoice.id, serviceLine.id, {
+          ...(allowReplace && { service: serviceId }),
           price_charged: priceNumber,
+          product_used: isMileageCorrection ? null : productUsedId,
+          product_price: isMileageCorrection ? 0 : productPriceNumber,
           asset_used: isMileageCorrection ? undefined : assetUsedId,
           ...(isMileageCorrection && {
+            ...(allowReplace && !meterLocked && { meter: meterId }),
             serial_number: serialNumber.trim(),
             condition_note: conditionNote.trim(),
             previous_km: previousKm === "" ? null : Number(previousKm),
             current_km: currentKm === "" ? null : Number(currentKm),
             mileage_correction_device: deviceId,
           }),
+          ...(reason && { reason }),
         });
-        toast.success("Service updated.");
+        toast.success(allowReplace ? "Service line replaced." : "Service updated.");
       } else {
         await addServiceLine(invoice.id, {
           service: serviceId,
           price_charged: priceNumber,
+          product_used: isMileageCorrection ? null : productUsedId,
+          product_price: isMileageCorrection ? 0 : productPriceNumber,
           asset_used: isMileageCorrection ? null : assetUsedId,
           ...(isMileageCorrection && {
             meter: meterId,
@@ -215,11 +260,13 @@ export function ServiceLineDialog({
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit service" : "Add a service"}</DialogTitle>
+          <DialogTitle>{allowReplace ? "Replace service" : isEdit ? "Edit service" : "Add a service"}</DialogTitle>
           <DialogDescription>
-            {isEdit
-              ? "Update this line's details."
-              : "Search for a service - Mileage Correction expands to collect the meter's details."}
+            {allowReplace
+              ? "Change which service (and meter, if applicable) this line bills."
+              : isEdit
+                ? "Update this line's details."
+                : "Search for a service - Mileage Correction expands to collect the meter's details."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -235,9 +282,11 @@ export function ServiceLineDialog({
                 setMeterId(null);
                 setDeviceId(null);
                 setAssetUsedId(null);
+                setProductUsedId(null);
                 setPriceEdited(false);
+                setProductPriceEdited(false);
               }}
-              disabled={isEdit}
+              disabled={serviceLocked}
               placeholder="Search services..."
               searchPlaceholder="Search services..."
             />
@@ -257,15 +306,13 @@ export function ServiceLineDialog({
                     setDeviceId(null);
                     setPriceEdited(false);
                   }}
-                  disabled={isEdit}
+                  disabled={meterLocked}
                   placeholder="Search meters..."
                   searchPlaceholder="Search meters..."
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="service-line-serial">
-                  Serial number <span className="text-destructive">*</span>
-                </Label>
+                <Label htmlFor="service-line-serial">Serial number (optional)</Label>
                 <Input
                   id="service-line-serial"
                   value={serialNumber}
@@ -284,9 +331,7 @@ export function ServiceLineDialog({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
-                  <Label htmlFor="service-line-previous-km">
-                    Previous KM <span className="text-destructive">*</span>
-                  </Label>
+                  <Label htmlFor="service-line-previous-km">Previous KM (optional)</Label>
                   <Input
                     id="service-line-previous-km"
                     type="number"
@@ -296,9 +341,7 @@ export function ServiceLineDialog({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="service-line-current-km">
-                    Current KM <span className="text-destructive">*</span>
-                  </Label>
+                  <Label htmlFor="service-line-current-km">Current KM (optional)</Label>
                   <Input
                     id="service-line-current-km"
                     type="number"
@@ -321,51 +364,103 @@ export function ServiceLineDialog({
                   searchPlaceholder="Search devices..."
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="service-line-price">
+                  Price <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="service-line-price"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={price}
+                  onChange={(event) => {
+                    setPrice(event.target.value);
+                    setPriceEdited(true);
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Defaults to the selected meter&apos;s sales price - edit to charge something else.
+                </p>
+              </div>
             </>
           )}
 
-          <div className="space-y-2">
-            <Label htmlFor="service-line-price">
-              Price <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="service-line-price"
-              type="number"
-              min={0}
-              step="0.01"
-              value={price}
-              onChange={(event) => {
-                setPrice(event.target.value);
-                setPriceEdited(true);
-              }}
-            />
-            <p className="text-xs text-muted-foreground">
-              {isMileageCorrection
-                ? "Defaults to the selected meter's sales price - edit to charge something else."
-                : "Defaults to the service's own price - edit to charge something else."}
-            </p>
-          </div>
-
-          {!isMileageCorrection && (
-            <div className="space-y-2">
-              <Label>Asset used</Label>
-              <Combobox
-                options={assetOptions}
-                value={assetUsedId}
-                onChange={setAssetUsedId}
-                allowClear
-                placeholder={assetOptions.length ? "Optional — which tool did the repair?" : "No assets recorded yet"}
-                disabled={assetOptions.length === 0}
-                emptyMessage="No assets found"
-                searchPlaceholder="Search assets..."
-              />
-            </div>
+          {!isMileageCorrection && selectedService && (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="service-line-charge">
+                  Service Charge <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="service-line-charge"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={price}
+                  onChange={(event) => {
+                    setPrice(event.target.value);
+                    setPriceEdited(true);
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Labor only - defaults to the service&apos;s own price, edit to charge something else.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Product used (optional)</Label>
+                <Combobox
+                  options={productOptions}
+                  value={productUsedId}
+                  onChange={(value) => {
+                    setProductUsedId(value);
+                    setProductPriceEdited(false);
+                  }}
+                  allowClear
+                  placeholder="Combination repairs only, e.g. a display panel or polarizer paper"
+                  searchPlaceholder="Search products..."
+                />
+              </div>
+              {productUsedId != null && (
+                <div className="space-y-2">
+                  <Label htmlFor="service-line-product-price">Product Price</Label>
+                  <Input
+                    id="service-line-product-price"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={productPrice}
+                    onChange={(event) => {
+                      setProductPrice(event.target.value);
+                      setProductPriceEdited(true);
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Independent of the service charge - defaults to the product&apos;s sale price, edit to charge
+                    something else.
+                  </p>
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label>Asset used</Label>
+                <Combobox
+                  options={assetOptions}
+                  value={assetUsedId}
+                  onChange={setAssetUsedId}
+                  allowClear
+                  placeholder={assetOptions.length ? "Optional — which tool did the repair?" : "No assets recorded yet"}
+                  disabled={assetOptions.length === 0}
+                  emptyMessage="No assets found"
+                  searchPlaceholder="Search assets..."
+                />
+              </div>
+            </>
           )}
 
           <ErrorBanner message={error} />
           <DialogFooter>
             <Button type="submit" disabled={!isValid || isSubmitting}>
-              {isSubmitting ? "Saving..." : isEdit ? "Save changes" : "Add service"}
+              {isSubmitting ? "Saving..." : allowReplace ? "Replace" : isEdit ? "Save changes" : "Add service"}
             </Button>
           </DialogFooter>
         </form>

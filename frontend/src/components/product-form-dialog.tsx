@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Pencil, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { ImageUploadField } from "@/components/image-upload-field";
@@ -18,9 +19,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { createProduct, updateProduct } from "@/lib/api";
+import { createProduct, previewProductSku, updateProduct } from "@/lib/api";
 import { reportError } from "@/lib/errors";
+import { cn } from "@/lib/utils";
 import type { ProductItem, ProductPayload, Supplier } from "@/lib/types";
+
+// How long to wait after the user stops typing name/supplier before asking
+// the backend for a fresh SKU preview - short enough to feel live, long
+// enough not to hammer the endpoint on every keystroke.
+const SKU_PREVIEW_DEBOUNCE_MS = 400;
 
 export function ProductFormDialog({
   product,
@@ -43,6 +50,8 @@ export function ProductFormDialog({
   const setOpen = onOpenChangeProp ?? setInternalOpen;
   const [name, setName] = useState(product?.name ?? "");
   const [sku, setSku] = useState(product?.sku ?? "");
+  const [manualSku, setManualSku] = useState(false);
+  const [skuPreviewLoading, setSkuPreviewLoading] = useState(false);
   const [supplierId, setSupplierId] = useState<number | null>(product?.supplier ?? suppliers[0]?.id ?? null);
   const [salePrice, setSalePrice] = useState(product?.sale_price ?? "");
   const [description, setDescription] = useState(product?.description ?? "");
@@ -54,6 +63,7 @@ export function ProductFormDialog({
     if (!open) return;
     setName(product?.name ?? "");
     setSku(product?.sku ?? "");
+    setManualSku(false);
     setSupplierId(product?.supplier ?? suppliers[0]?.id ?? null);
     setSalePrice(product?.sale_price ?? "");
     setDescription(product?.description ?? "");
@@ -62,7 +72,43 @@ export function ProductFormDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, product]);
 
-  const isValid = name.trim() && sku.trim() && supplierId && salePrice;
+  // Live SKU preview while adding a new product (not editing an existing
+  // one - its SKU was already assigned) and not manually overridden -
+  // see apps.products.services.generate_sku(). Debounced, and guarded
+  // against out-of-order responses so a slow earlier request can't
+  // clobber a faster later one.
+  const previewRequestId = useRef(0);
+  useEffect(() => {
+    if (!open || isEdit || manualSku) return;
+    const trimmedName = name.trim();
+    const requestId = ++previewRequestId.current;
+
+    // Everything below runs inside the timeout callback (never synchronously
+    // in the effect body) so an incomplete name/supplier just clears the
+    // preview on the same debounced cadence instead of flashing immediately.
+    const timeoutId = setTimeout(() => {
+      if (!trimmedName || !supplierId) {
+        setSku("");
+        setSkuPreviewLoading(false);
+        return;
+      }
+      setSkuPreviewLoading(true);
+      previewProductSku(supplierId, trimmedName)
+        .then((result) => {
+          if (previewRequestId.current === requestId) setSku(result.sku);
+        })
+        .catch(() => {
+          // Best-effort preview only - leave whatever SKU is currently shown.
+        })
+        .finally(() => {
+          if (previewRequestId.current === requestId) setSkuPreviewLoading(false);
+        });
+    }, SKU_PREVIEW_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [open, isEdit, manualSku, name, supplierId]);
+
+  const isValid = name.trim() && supplierId && salePrice;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -72,7 +118,10 @@ export function ProductFormDialog({
     try {
       const payload: ProductPayload = {
         name: name.trim(),
-        sku: sku.trim(),
+        // In auto mode, don't send the previewed value at all - it can go
+        // stale (e.g. another product created in between), so let
+        // generate_sku() run fresh, authoritatively, at save time.
+        sku: manualSku ? sku.trim() || undefined : undefined,
         supplier: supplierId,
         sale_price: Number(salePrice),
         description: description.trim(),
@@ -110,10 +159,42 @@ export function ProductFormDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="product-sku">
-                SKU <span className="text-destructive">*</span>
-              </Label>
-              <Input id="product-sku" required value={sku} onChange={(event) => setSku(event.target.value)} />
+              <div className="flex items-center justify-between">
+                <Label htmlFor="product-sku">SKU {manualSku && <span className="text-destructive">*</span>}</Label>
+                <button
+                  type="button"
+                  onClick={() => setManualSku((prev) => !prev)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  title={manualSku ? "Switch back to auto-generated SKU" : "Edit SKU manually"}
+                >
+                  {manualSku ? (
+                    <>
+                      <Sparkles className="h-3 w-3" /> Auto-generate
+                    </>
+                  ) : (
+                    <>
+                      <Pencil className="h-3 w-3" /> Edit manually
+                    </>
+                  )}
+                </button>
+              </div>
+              <Input
+                id="product-sku"
+                readOnly={!manualSku}
+                placeholder={isEdit || manualSku ? "" : "Enter name & supplier to preview"}
+                value={sku}
+                onChange={(event) => setSku(event.target.value)}
+                className={cn(!manualSku && "bg-muted text-muted-foreground")}
+              />
+              {!manualSku && (
+                <p className="text-xs text-muted-foreground">
+                  {isEdit
+                    ? "Click \"Edit manually\" to change this product's SKU."
+                    : skuPreviewLoading
+                      ? "Previewing…"
+                      : "Auto-generated from supplier + product name."}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="product-sale-price">

@@ -1,9 +1,80 @@
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 from django.utils import timezone
 
 TWO_PLACES = Decimal("0.01")
+
+_WORD_RE = re.compile(r"[A-Za-z0-9]+")
+
+_SKU_SERIAL_DIGITS = 2
+
+
+def _words(text):
+    """Alphanumeric tokens in `text`, punctuation/whitespace as separators -
+    e.g. "O'Learys Bike-Parts" -> ["O", "Learys", "Bike", "Parts"]."""
+    return _WORD_RE.findall(text or "")
+
+
+def _supplier_sku_prefix(supplier_name):
+    """Rule 1: initial letter of each of the first two "meaningful" words in
+    the supplier's name, dropping a trailing short (<=3 char) all-caps
+    token that looks like a country/branch code (e.g. "BD", "UK") - but
+    only when there's at least one other word, so a supplier named just
+    "BD" doesn't get stripped down to nothing.
+
+        "Meter Expert BD" -> drop "BD" -> "Meter", "Expert" -> "ME"
+    """
+    words = _words(supplier_name)
+    if len(words) > 1 and len(words[-1]) <= 3 and words[-1].isupper():
+        words = words[:-1]
+    return "".join(word[0].upper() for word in words[:2])
+
+
+def _product_sku_code(product_name):
+    """Rule 2: initial letter of every word except the last, then the last
+    word appended as-is (it's usually a model/variant code like "UG4").
+    A single-word name has no "every word except the last", so it falls
+    through to just that word, unchanged.
+
+        "Pulsar Display UG4" -> "P" + "D" + "UG4" = "PDUG4"
+    """
+    words = _words(product_name)
+    if not words:
+        return ""
+    *lead_words, last_word = words
+    return "".join(word[0].upper() for word in lead_words) + last_word
+
+
+def generate_sku(supplier_name, product_name):
+    """Rule 3: {supplier_prefix}{product_code}-{serial}, where serial is a
+    zero-padded 2-digit number that auto-increments per unique
+    {supplier_prefix}{product_code} combination.
+
+        generate_sku("Meter Expert BD", "Pulsar Display UG4") == "MEPDUG4-01"
+
+    Looks at every Product ever created with this exact base (including
+    soft-deleted ones, via all_objects - a deleted product must still keep
+    its serial slot reserved forever, so the sequence never reissues a SKU)
+    to find the next serial. Pure string-matching against `sku` - it
+    doesn't re-derive the base from those products' name/supplier, so a
+    manually-entered SKU that happens to share the base still counts.
+    """
+    from apps.products.models import Product
+
+    base = f"{_supplier_sku_prefix(supplier_name)}{_product_sku_code(product_name)}"
+    serial_pattern = re.compile(rf"^{re.escape(base)}-(\d+)$")
+
+    max_serial = 0
+    existing_skus = Product.all_objects.filter(sku__startswith=f"{base}-").values_list("sku", flat=True)
+    for sku in existing_skus:
+        match = serial_pattern.match(sku)
+        if match:
+            max_serial = max(max_serial, int(match.group(1)))
+
+    next_serial = max_serial + 1
+    return f"{base}-{next_serial:0{_SKU_SERIAL_DIGITS}d}"
 
 
 def compute_landed_unit_cost(quantity, unit_price, extra_costs=Decimal("0")):

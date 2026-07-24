@@ -86,7 +86,15 @@ function CustomerLedgerCard({ ledger }: { ledger: CustomerLedger }) {
                       <Badge variant={statusBadgeVariant(invoice.status)}>{invoice.status}</Badge>
                     </TableCell>
                     <TableCell className="text-right">৳{invoice.total_amount}</TableCell>
-                    <TableCell className="text-right">৳{invoice.paid_amount}</TableCell>
+                    <TableCell className="text-right">
+                      ৳{invoice.paid_amount}
+                      {Number(invoice.waived_amount) > 0 && (
+                        <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                          Waived ৳{invoice.waived_amount}
+                          {invoice.waived_note ? ` — ${invoice.waived_note}` : ""}
+                        </p>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">৳{invoice.outstanding_amount}</TableCell>
                   </TableRow>
                 ))}
