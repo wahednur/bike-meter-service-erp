@@ -123,20 +123,31 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-#
-# A single connection string, both locally and in production (Neon,
-# Supabase, Render Postgres, etc.). Locally this points at your local
-# Postgres, e.g. postgres://postgres:password@localhost:5432/dbname.
 
-DATABASE_URL = env('DATABASE_URL')
+DATABASE_URL = env('DATABASE_URL', default=None)
 
-DATABASES = {
-    'default': dj_database_url.parse(
-        DATABASE_URL,
-        conn_max_age=600,
-        ssl_require=not DEBUG,
-    )
-}
+if DATABASE_URL:
+    # Production / hosted Postgres (Neon, Supabase, Render, etc.) — a single
+    # connection string is supplied via the DATABASE_URL env var.
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=not DEBUG,
+        )
+    }
+else:
+    # Local development — discrete DB_* env vars from .env.
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': env('DB_NAME'),
+            'USER': env('DB_USER'),
+            'PASSWORD': env('DB_PASSWORD'),
+            'HOST': env('DB_HOST'),
+            'PORT': env('DB_PORT'),
+        }
+    }
 
 
 # Password validation
