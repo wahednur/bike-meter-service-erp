@@ -625,7 +625,6 @@ export interface AdminDashboardSummary {
   low_stock_products: LowStockProduct[];
   low_stock_threshold: number;
   upcoming_loan_installments: UpcomingInstallment[];
-  upcoming_days: number;
   today_expense: string;
   this_week_expense: string;
   this_month_expense: string;

@@ -168,16 +168,14 @@ class DashboardSummaryView(BaseReportView):
 
 class AdminDashboardView(BaseReportView):
     """Today's income, pending dues, red-listed customers, low-stock
-    products, and upcoming loan installments - all in one response.
-    Distinct from DashboardSummaryView above (a date-range financial
-    overview): this one is always "right now", not date-range filterable.
-    Optional ?low_stock_threshold=&upcoming_days= override the defaults."""
+    products, and loan installments needing attention - all in one
+    response. Distinct from DashboardSummaryView above (a date-range
+    financial overview): this one is always "right now", not date-range
+    filterable. Optional ?low_stock_threshold= overrides the default."""
 
     def get(self, request):
         low_stock_threshold = request.query_params.get("low_stock_threshold")
-        upcoming_days = request.query_params.get("upcoming_days")
         data = report_services.admin_dashboard_summary(
             low_stock_threshold=int(low_stock_threshold) if low_stock_threshold else None,
-            upcoming_days=int(upcoming_days) if upcoming_days else 7,
         )
         return Response(AdminDashboardSummarySerializer(data).data)

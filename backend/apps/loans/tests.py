@@ -187,6 +187,30 @@ class LoanServiceTests(TestCase):
         self.assertIn(due_soon_loan.id, loan_ids)
         self.assertNotIn(due_later_loan.id, loan_ids)
 
+    def test_within_days_none_disables_the_upcoming_window_entirely(self):
+        """Regression test: a loan due 10 days out is excluded with the
+        default 7-day window (as above), but with within_days=None (what
+        the admin dashboard now uses) it must show up regardless of how
+        far out it is - a caught-up loan should never silently vanish
+        just because its next installment falls a bit past a fixed
+        lookahead."""
+        reference_date = date(2026, 7, 27)
+
+        due_later_loan = Loan.objects.create(
+            lender_name="Due Later Bank", lender_type=Loan.LenderType.BANK,
+            loan_amount=Decimal("20000.00"), interest_amount=Decimal("2000.00"),
+            total_installments=6, installment_amount=Decimal("3666.67"),
+            installment_frequency=Loan.InstallmentFrequency.MONTHLY, start_date=date(2026, 7, 6),
+        )
+        # due_later_loan's next installment is due 2026-08-06 - 10 days out
+
+        rows = loan_services.upcoming_installments(within_days=None, reference_date=reference_date)
+        loan_rows = [r for r in rows if r["loan_id"] == due_later_loan.id]
+
+        self.assertEqual(len(loan_rows), 1)
+        self.assertFalse(loan_rows[0]["is_overdue"])
+        self.assertEqual(loan_rows[0]["due_date"], date(2026, 8, 6))
+
 
 class OverdueVsUpcomingInstallmentTests(TestCase):
     """Regression coverage for the "Upcoming Loan Installments" bug report:

@@ -235,7 +235,7 @@ class ReportServiceTests(TestCase):
             category=Expense.Category.MISC, amount=Decimal("9999.00"), date=today - timedelta(days=45),
         )
 
-        data = report_services.admin_dashboard_summary(low_stock_threshold=5, upcoming_days=10)
+        data = report_services.admin_dashboard_summary(low_stock_threshold=5)
 
         self.assertEqual(data["today_income"], Decimal("100.00"))
         self.assertEqual(data["today_invoice_count"], 1)
@@ -269,6 +269,31 @@ class ReportServiceTests(TestCase):
         self.assertEqual(data["is_early_month_estimate"], days_elapsed < 5)
         self.assertEqual(data["top_expense_category_this_month"]["category"], Expense.Category.RENT)
         self.assertEqual(data["top_expense_category_this_month"]["amount"], Decimal("5000.00"))
+
+    def test_admin_dashboard_shows_next_installment_even_far_in_the_future(self):
+        """Regression test: a loan with nothing overdue and its next
+        installment well beyond any fixed lookahead window must still
+        show up - the admin dashboard's upcoming_loan_installments no
+        longer windows the "upcoming" side at all (unlike notification
+        reminders, which still do), so a caught-up loan never silently
+        disappears from the widget just because its next payment happens
+        to fall a bit further out."""
+        loan = Loan.objects.create(
+            lender_name="Pridim Foundation", lender_type=Loan.LenderType.NGO,
+            loan_amount=Decimal("20000.00"), interest_amount=Decimal("2000.00"),
+            total_installments=4, installment_amount=Decimal("5500.00"),
+            installment_frequency=Loan.InstallmentFrequency.MONTHLY,
+            start_date=timezone.now().date(),
+        )
+        # MONTHLY from today: installment 1 is due ~a month out - well
+        # beyond the old default 7-day (or even a widened 10/14-day) window.
+
+        data = report_services.admin_dashboard_summary()
+
+        loan_rows = [r for r in data["upcoming_loan_installments"] if r["loan_id"] == loan.id]
+        self.assertEqual(len(loan_rows), 1)
+        self.assertFalse(loan_rows[0]["is_overdue"])
+        self.assertEqual(loan_rows[0]["installment_number"], 1)
 
     # --- top customers report ---------------------------------------------------
 

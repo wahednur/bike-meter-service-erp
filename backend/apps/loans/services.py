@@ -138,7 +138,7 @@ def _installment_alert_row(loan, installment_row, is_overdue):
 
 
 def upcoming_installments(within_days=7, reference_date=None):
-    """Loan installment alerts for the dashboard, soonest first.
+    """Loan installment alerts, soonest first.
 
     Each loan can contribute up to *two* rows, not just one - and one
     never silently replaces the other:
@@ -147,7 +147,8 @@ def upcoming_installments(within_days=7, reference_date=None):
         of `within_days` - a loan already behind stays worth flagging no
         matter how the lookahead window is tuned.
       - its earliest unpaid installment that isn't due yet, if that due
-        date falls within the next `within_days` days of `reference_date`.
+        date falls within the next `within_days` days of `reference_date`
+        - or unconditionally, if `within_days` is None.
 
     Both can appear for the same loan at once - e.g. installment 3 is
     unpaid and overdue *and* installment 4 is unpaid and due in 3 days.
@@ -156,11 +157,22 @@ def upcoming_installments(within_days=7, reference_date=None):
     overdue, a genuinely upcoming later installment was never reported at
     all - not filtered out, just never looked at. `is_overdue`
     distinguishes the two cases on each row so callers don't have to
-    compare dates themselves."""
+    compare dates themselves.
+
+    `within_days=None` (used by the admin dashboard widget) disables the
+    upcoming-side window entirely, so every loan with an unpaid
+    installment always has *some* row here - its overdue one, its next
+    upcoming one however far out, or both - the same "always show what's
+    next" guarantee the Loan detail page's Next Installment card already
+    has, rather than a loan silently vanishing from the dashboard just
+    because its next installment happens to fall a few days past a fixed
+    lookahead. Notification generation still passes a real `within_days`
+    so reminders stay bounded to a sensible timeframe - nobody wants a
+    "due in 4 months" notification today."""
     from apps.loans.models import Loan
 
     reference_date = reference_date or timezone.now().date()
-    horizon = reference_date + timedelta(days=within_days)
+    horizon = None if within_days is None else reference_date + timedelta(days=within_days)
 
     rows = []
     for loan in Loan.objects.all():
@@ -170,7 +182,7 @@ def upcoming_installments(within_days=7, reference_date=None):
 
         if overdue is not None:
             rows.append(_installment_alert_row(loan, overdue, is_overdue=True))
-        if upcoming is not None and upcoming["due_date"] <= horizon:
+        if upcoming is not None and (horizon is None or upcoming["due_date"] <= horizon):
             rows.append(_installment_alert_row(loan, upcoming, is_overdue=False))
 
     rows.sort(key=lambda r: (r["due_date"], r["is_overdue"]))

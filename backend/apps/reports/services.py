@@ -684,11 +684,11 @@ def project_month_income(this_month_income, days_elapsed, days_in_month):
 
 # --- Admin dashboard: today's operational snapshot ------------------------------
 
-def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
+def admin_dashboard_summary(low_stock_threshold=None):
     """Distinct from dashboard_summary() above (which is a date-range
     financial P&L-style overview): this is a fixed, always-"right now"
     operational snapshot - today's income, pending dues, red-listed
-    customers, low stock, and installments coming due soon. Not
+    customers, low stock, and loan installments needing attention. Not
     date-range-filterable, since "today" and "upcoming" are the point."""
     import calendar
     import datetime
@@ -726,7 +726,11 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
         for p in product_services.low_stock_products(threshold=low_stock_threshold)
     ]
 
-    upcoming = loan_services.upcoming_installments(within_days=upcoming_days, reference_date=today)
+    # within_days=None: every loan with an unpaid installment shows here -
+    # its overdue one, its next upcoming one however far out, or both -
+    # see upcoming_installments()'s docstring for why this must not be
+    # windowed the way notification reminders are.
+    upcoming = loan_services.upcoming_installments(within_days=None, reference_date=today)
 
     # Manual operating expenses only (apps.expenses.Expense - rent,
     # electricity, transport, misc) - NOT the broader restock/asset/device
@@ -783,7 +787,6 @@ def admin_dashboard_summary(low_stock_threshold=None, upcoming_days=7):
         "low_stock_products": low_stock_rows,
         "low_stock_threshold": low_stock_threshold,
         "upcoming_loan_installments": upcoming,
-        "upcoming_days": upcoming_days,
         "today_expense": today_expense,
         "this_week_expense": this_week_expense,
         "this_month_expense": this_month_expense,

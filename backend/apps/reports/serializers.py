@@ -227,7 +227,6 @@ class AdminDashboardSummarySerializer(serializers.Serializer):
     low_stock_products = LowStockProductSerializer(many=True)
     low_stock_threshold = serializers.IntegerField()
     upcoming_loan_installments = UpcomingInstallmentSerializer(many=True)
-    upcoming_days = serializers.IntegerField()
     today_expense = serializers.DecimalField(max_digits=14, decimal_places=2)
     this_week_expense = serializers.DecimalField(max_digits=14, decimal_places=2)
     this_month_expense = serializers.DecimalField(max_digits=14, decimal_places=2)

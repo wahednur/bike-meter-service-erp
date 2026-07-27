@@ -182,7 +182,7 @@ function DashboardContent() {
         <StatCard
           label="Upcoming Installments"
           value={String(data.upcoming_loan_installments.length)}
-          hint={`next ${data.upcoming_days} days`}
+          hint="overdue + next due"
           icon={CalendarClock}
           accentIndex={3}
         />
@@ -319,7 +319,7 @@ function DashboardContent() {
       <section>
         <h2 className="mb-2 text-sm font-semibold">
           Upcoming Loan Installments{" "}
-          <span className="font-normal text-muted-foreground">(next {data.upcoming_days} days)</span>
+          <span className="font-normal text-muted-foreground">(overdue + next due)</span>
         </h2>
         {data.upcoming_loan_installments.length === 0 ? (
           <EmptyState icon={CalendarClock} title="Nothing due soon" />
