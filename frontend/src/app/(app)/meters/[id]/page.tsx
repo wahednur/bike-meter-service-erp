@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { ConditionNoteBadges } from "@/components/condition-note-badges";
 import { EmptyState } from "@/components/empty-state";
 import { ImageThumbnail } from "@/components/image-thumbnail";
 import { MeterFormDialog } from "@/components/meter-form-dialog";
@@ -20,9 +21,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getMeter, getMeterStats } from "@/lib/api";
+import { getMeter, getMeterServiceHistory, getMeterStats } from "@/lib/api";
 import { reportError } from "@/lib/errors";
-import type { Meter, MeterServiceStats } from "@/lib/types";
+import type { Meter, MeterServiceHistoryEntry, MeterServiceStats } from "@/lib/types";
 
 function ServiceStatsCard({ stats }: { stats: MeterServiceStats }) {
   return (
@@ -77,19 +78,68 @@ function ServiceStatsCard({ stats }: { stats: MeterServiceStats }) {
   );
 }
 
+function ServiceHistoryCard({ history }: { history: MeterServiceHistoryEntry[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Service History</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {history.length === 0 ? (
+          <EmptyState icon={Wrench} title="No visits recorded for this meter yet" />
+        ) : (
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Invoice</TableHead>
+                  <TableHead>Serial</TableHead>
+                  <TableHead>Condition</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {history.map((entry) => (
+                  <TableRow key={entry.id}>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(entry.service_date).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell>
+                      <Link href={`/invoices/${entry.invoice_id}`} className="font-medium hover:underline">
+                        {entry.invoice_no}
+                      </Link>
+                      <p className="text-xs text-muted-foreground">{entry.customer_name}</p>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{entry.serial_number ?? "—"}</TableCell>
+                    <TableCell>
+                      <ConditionNoteBadges conditions={entry.condition_note} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function MeterDetailPage() {
   const params = useParams<{ id: string }>();
   const meterId = Number(params.id);
 
   const [meter, setMeter] = useState<Meter | null>(null);
   const [stats, setStats] = useState<MeterServiceStats | null>(null);
+  const [history, setHistory] = useState<MeterServiceHistoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([getMeter(meterId), getMeterStats(meterId)])
-      .then(([meterResult, statsResult]) => {
+    Promise.all([getMeter(meterId), getMeterStats(meterId), getMeterServiceHistory(meterId)])
+      .then(([meterResult, statsResult, historyResult]) => {
         setMeter(meterResult);
         setStats(statsResult);
+        setHistory(historyResult);
       })
       .catch((err: unknown) => {
         setError(reportError(err, "Failed to load this meter."));
@@ -104,7 +154,7 @@ export default function MeterDetailPage() {
     return <p className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</p>;
   }
 
-  if (!meter || !stats) {
+  if (!meter || !stats || !history) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-6 w-48" />
@@ -172,6 +222,7 @@ export default function MeterDetailPage() {
       </Card>
 
       <ServiceStatsCard stats={stats} />
+      <ServiceHistoryCard history={history} />
     </div>
   );
 }

@@ -207,6 +207,7 @@ class UpcomingInstallmentSerializer(serializers.Serializer):
     installment_number = serializers.IntegerField()
     due_date = serializers.DateField()
     installment_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    is_overdue = serializers.BooleanField()
 
 
 class TopExpenseCategorySerializer(serializers.Serializer):

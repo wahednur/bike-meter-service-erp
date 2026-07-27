@@ -239,13 +239,13 @@ class Command(BaseCommand):
             invoice, _ = invoice_services.get_or_create_open_invoice(rahim, user=admin)
             entry1 = invoice_services.add_meter_entry(
                 invoice, meters["Bajaj Discover 125"], serial_number="MCU-DEMO-001",
-                condition_note="Casing scratched, screen dim", previous_km=45210, current_km=12000,
+                condition_note=["Display Problem", "Casing scratched"], previous_km=45210, current_km=12000,
                 mileage_correction_device=devices["VVDI Prog"], user=admin,
             )
             invoice_services.add_service_line(invoice, services["Mileage Correction"], meter_entry=entry1, user=admin)
             entry2 = invoice_services.add_meter_entry(
                 invoice, meters["Yamaha FZ V2"], serial_number="EEP-DEMO-001",
-                condition_note="LED strip flickering", user=admin,
+                condition_note=["Light IC Problem", "LED strip flickering"], user=admin,
             )
             invoice_services.add_service_line(invoice, services["LED IC problem repair"], meter_entry=entry2, user=admin)
             invoice_services.add_product_line(invoice, products["CASING-001"], quantity=1, user=admin)
@@ -260,7 +260,8 @@ class Command(BaseCommand):
             invoice, _ = invoice_services.get_or_create_open_invoice(karim, user=admin)
             entry = invoice_services.add_meter_entry(
                 invoice, meters["Suzuki SF 150"], serial_number="EEP-DEMO-002",
-                condition_note="Odometer frozen, needs correction", previous_km=30500, current_km=5000,
+                condition_note=["Kilometer Problem", "Odometer frozen, needs correction"],
+                previous_km=30500, current_km=5000,
                 mileage_correction_device=devices["RT809F"], user=admin,
             )
             invoice_services.add_service_line(invoice, services["Mileage Correction"], meter_entry=entry, user=admin)
@@ -275,7 +276,7 @@ class Command(BaseCommand):
             invoice, _ = invoice_services.get_or_create_open_invoice(nasrin, user=admin)
             entry = invoice_services.add_meter_entry(
                 invoice, meters["Honda CB Shine"], serial_number="MCU-DEMO-002",
-                condition_note="Main board burnt smell", user=admin,
+                condition_note=["IC Problem", "Main board burnt smell"], user=admin,
             )
             invoice_services.add_service_line(invoice, services["Main board repair"], meter_entry=entry, user=admin)
             invoice_services.add_product_line(invoice, products["LED-001"], quantity=2, user=admin)

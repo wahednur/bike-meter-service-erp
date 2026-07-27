@@ -88,10 +88,32 @@ class Invoice(BaseModel):
 class InvoiceMeterEntry(BaseModel):
     """One meter brought in on this invoice/visit."""
 
+    # Suggested tags for condition_note - offered to the shop owner as
+    # presets, not enforced as a restriction. condition_note happily stores
+    # any mix of these plus free-text entries the owner types themselves
+    # (e.g. ["Power IC Problem", "Sticker peeling off"]).
+    CONDITION_TAG_PRESETS = [
+        "Good",
+        "Display Problem",
+        "Water Damage",
+        "IC Problem",
+        "Light Problem",
+        "Signal Light Problem",
+        "Display Light Problem",
+        "Power IC Problem",
+        "Light IC Problem",
+        "Kilometer Problem",
+    ]
+
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="meter_entries")
     meter = models.ForeignKey(Meter, on_delete=models.PROTECT, related_name="invoice_entries")
     serial_number = models.CharField(max_length=100, blank=True, null=True)
-    condition_note = models.TextField(blank=True)
+    # A meter can have several problems at once (e.g. Power Failure +
+    # Display Problem together) - a list of tags rather than a single note.
+    # Optional: save() below defaults an empty selection to ["Good"],
+    # regardless of creation path (service layer, admin, shell, migration) -
+    # same safety-net pattern as Invoice.save() above.
+    condition_note = models.JSONField(default=list, blank=True)
     previous_km = models.PositiveIntegerField(null=True, blank=True)
     current_km = models.PositiveIntegerField(null=True, blank=True)
     mileage_correction_device = models.ForeignKey(
@@ -113,6 +135,11 @@ class InvoiceMeterEntry(BaseModel):
 
     def __str__(self):
         return f"{self.meter} (serial {self.serial_number}) on {self.invoice.invoice_no}"
+
+    def save(self, *args, **kwargs):
+        if not self.condition_note:
+            self.condition_note = ["Good"]
+        super().save(*args, **kwargs)
 
 
 class InvoiceServiceLine(BaseModel):

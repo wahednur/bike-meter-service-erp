@@ -45,6 +45,7 @@ import type {
   LoanPayload,
   LoginResponse,
   MeterPayload,
+  MeterServiceHistoryEntry,
   MeterServiceStats,
   MileageCorrectionDevice,
   MileageCorrectionDevicePayload,
@@ -387,6 +388,10 @@ export function deleteMeter(id: number): Promise<void> {
 
 export function getMeterStats(id: number): Promise<MeterServiceStats> {
   return apiFetch<MeterServiceStats>(`/meters/${id}/stats/`);
+}
+
+export function getMeterServiceHistory(id: number): Promise<MeterServiceHistoryEntry[]> {
+  return apiFetch<MeterServiceHistoryEntry[]>(`/meters/${id}/service-history/`);
 }
 
 // --- mileage correction devices -------------------------------------------------

@@ -32,6 +32,34 @@ def compute_meter_service_stats(meter):
     }
 
 
+def compute_meter_service_history(meter):
+    """Every individual visit this meter has been brought in for, one row
+    per InvoiceMeterEntry, newest first. The itemized list behind
+    compute_meter_service_stats() above (which only aggregates) - lets the
+    frontend show each visit's own recorded condition_note tags."""
+    from apps.invoices.models import InvoiceMeterEntry
+
+    entries = (
+        InvoiceMeterEntry.objects.filter(meter=meter)
+        .select_related("invoice", "invoice__customer")
+        .order_by("-service_date")
+    )
+    return [
+        {
+            "id": entry.id,
+            "invoice_id": entry.invoice_id,
+            "invoice_no": entry.invoice.invoice_no,
+            "customer_name": entry.invoice.customer.name,
+            "serial_number": entry.serial_number,
+            "condition_note": entry.condition_note,
+            "previous_km": entry.previous_km,
+            "current_km": entry.current_km,
+            "service_date": entry.service_date,
+        }
+        for entry in entries
+    ]
+
+
 def compute_mileage_correction_device_stats(device):
     """Now that the Invoice app exists, a device's job count/revenue can be
     computed for real: every InvoiceServiceLine for a Mileage Correction

@@ -7,10 +7,11 @@ from apps.meters.models import MileageCorrectionDevice, Meter
 from apps.meters.serializers import (
     MeterListSerializer,
     MeterSerializer,
+    MeterServiceHistoryEntrySerializer,
     MeterServiceStatsSerializer,
     MileageCorrectionDeviceSerializer,
 )
-from apps.meters.services import compute_meter_service_stats
+from apps.meters.services import compute_meter_service_history, compute_meter_service_stats
 
 
 class MeterViewSet(viewsets.ModelViewSet):
@@ -36,6 +37,12 @@ class MeterViewSet(viewsets.ModelViewSet):
         meter = self.get_object()
         stats = compute_meter_service_stats(meter)
         return Response(MeterServiceStatsSerializer(stats).data)
+
+    @action(detail=True, methods=["get"], url_path="service-history")
+    def service_history(self, request, pk=None):
+        meter = self.get_object()
+        history = compute_meter_service_history(meter)
+        return Response(MeterServiceHistoryEntrySerializer(history, many=True).data)
 
 
 class MileageCorrectionDeviceViewSet(viewsets.ModelViewSet):

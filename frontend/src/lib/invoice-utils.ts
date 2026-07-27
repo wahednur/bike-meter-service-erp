@@ -1,5 +1,22 @@
 import type { MileageCorrectionDevice, Meter } from "./types";
 
+/** Mirrors InvoiceMeterEntry.CONDITION_TAG_PRESETS on the backend
+ * (apps/invoices/models.py) - suggested options for the condition-note
+ * multi-select, not an enforced restriction; a custom/free-text tag is
+ * always allowed alongside these. */
+export const CONDITION_TAG_PRESETS = [
+  "Good",
+  "Display Problem",
+  "Water Damage",
+  "IC Problem",
+  "Light Problem",
+  "Signal Light Problem",
+  "Display Light Problem",
+  "Power IC Problem",
+  "Light IC Problem",
+  "Kilometer Problem",
+];
+
 /** Mirrors Meter.ALLOWED_CORRECTION_TOOLS on the backend (apps/meters/models.py) -
  * MCU meters can only use "VVDI Prog"; EEPROM meters allow the other four tools.
  * Matched by exact device name, same as the server-side validator. */

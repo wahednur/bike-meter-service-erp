@@ -2,7 +2,9 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
 from apps.assets.models import Asset
@@ -110,17 +112,29 @@ class InvoiceServiceTests(TestCase):
 
     # --- Mileage Correction service requires meter entry km/condition data ---
 
-    def test_mileage_correction_service_requires_km_and_condition_note(self):
+    def test_bare_meter_entry_with_no_condition_tags_defaults_to_good(self):
+        """InvoiceMeterEntry.condition_note is optional - an entry created
+        with no tags selected defaults to ["Good"] (see
+        InvoiceMeterEntry.save()), so attaching it afterwards to a Mileage
+        Correction service line no longer needs a retroactive edit first -
+        unlike creating a *new* entry inline for one, which still requires
+        at least one tag (see test_merged_call_still_enforces_condition_note)."""
         invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
         entry = invoice_services.add_meter_entry(invoice, self.mcu_meter, serial_number="MCU-002")
+        self.assertEqual(entry.condition_note, ["Good"])
 
-        with self.assertRaises(InvoiceError):
-            invoice_services.add_service_line(invoice, self.mc_service, meter_entry=entry)
-
-        entry.previous_km, entry.current_km, entry.condition_note = 12000, 8000, "Casing intact, screen fine"
-        entry.save()
         line = invoice_services.add_service_line(invoice, self.mc_service, meter_entry=entry)
         self.assertEqual(line.service, self.mc_service)
+
+    def test_meter_entry_condition_note_supports_multiple_preset_and_custom_tags(self):
+        invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+        entry = invoice_services.add_meter_entry(
+            invoice, self.mcu_meter, serial_number="MCU-003",
+            condition_note=["Power IC Problem", "Display Problem", "Sticker peeling off"],
+        )
+        self.assertEqual(
+            entry.condition_note, ["Power IC Problem", "Display Problem", "Sticker peeling off"],
+        )
 
     def test_mileage_correction_service_without_meter_entry_rejected(self):
         invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
@@ -360,7 +374,7 @@ class PublicInvoiceViewTests(TestCase):
         self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
         invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="H1",
-            previous_km=2000, current_km=1000, condition_note="fine",
+            previous_km=2000, current_km=1000, condition_note=["fine"],
             mileage_correction_device=self.vvdi,
         )
         self.client = APIClient()  # deliberately unauthenticated
@@ -662,7 +676,7 @@ class MergedAddServiceLineTests(TestCase):
     def test_merged_call_creates_meter_entry_and_service_line_together(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service,
-            meter=self.meter, serial_number="MC-001", condition_note="Casing fine",
+            meter=self.meter, serial_number="MC-001", condition_note=["Casing fine"],
             previous_km=15000, current_km=8000, mileage_correction_device=self.vvdi,
         )
 
@@ -677,7 +691,7 @@ class MergedAddServiceLineTests(TestCase):
     def test_price_defaults_to_meter_sales_price_when_blank(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service,
-            meter=self.meter, serial_number="MC-002", condition_note="Fine",
+            meter=self.meter, serial_number="MC-002", condition_note=["Fine"],
             previous_km=15000, current_km=8000,
         )
         line.refresh_from_db()
@@ -686,7 +700,7 @@ class MergedAddServiceLineTests(TestCase):
     def test_explicit_price_overrides_default_instead_of_adding(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service,
-            meter=self.meter, serial_number="MC-003", condition_note="Fine",
+            meter=self.meter, serial_number="MC-003", condition_note=["Fine"],
             previous_km=15000, current_km=8000, price_charged=Decimal("1200.00"),
         )
         self.assertEqual(line.price_charged, Decimal("1200.00"))
@@ -700,7 +714,7 @@ class MergedAddServiceLineTests(TestCase):
     def test_merged_call_requires_meter_when_no_meter_entry_given(self):
         with self.assertRaises(InvoiceError):
             invoice_services.add_service_line(
-                self.invoice, self.mc_service, serial_number="MC-004", previous_km=1, current_km=1, condition_note="x",
+                self.invoice, self.mc_service, serial_number="MC-004", previous_km=1, current_km=1, condition_note=["x"],
             )
 
     def test_merged_call_still_enforces_condition_note(self):
@@ -709,17 +723,23 @@ class MergedAddServiceLineTests(TestCase):
 
     def test_merged_call_allows_missing_previous_and_current_km(self):
         line = invoice_services.add_service_line(
-            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-005b", condition_note="fine",
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-005b", condition_note=["fine"],
         )
         self.assertIsNone(line.meter_entry.previous_km)
         self.assertIsNone(line.meter_entry.current_km)
 
-    def test_merged_call_rejects_current_km_greater_than_previous_km(self):
-        with self.assertRaises(InvoiceError):
-            invoice_services.add_service_line(
-                self.invoice, self.mc_service, meter=self.meter, serial_number="MC-005c",
-                condition_note="fine", previous_km=1000, current_km=2000,
-            )
+    def test_merged_call_allows_current_km_greater_than_previous_km(self):
+        """previous_km/current_km are independent - no relational rule
+        between them. A mileage correction job's whole point is rolling an
+        inflated odometer reading back down, so current_km ending up
+        *lower* than previous_km is the normal case, but the reverse
+        (or any other combination) must be accepted too, not rejected."""
+        line = invoice_services.add_service_line(
+            self.invoice, self.mc_service, meter=self.meter, serial_number="MC-005c",
+            condition_note=["fine"], previous_km=1000, current_km=2000,
+        )
+        self.assertEqual(line.meter_entry.previous_km, 1000)
+        self.assertEqual(line.meter_entry.current_km, 2000)
 
     def test_merged_call_still_enforces_device_memory_type_match(self):
         rt809f, _ = MileageCorrectionDevice.objects.get_or_create(
@@ -732,7 +752,7 @@ class MergedAddServiceLineTests(TestCase):
         with self.assertRaises(InvoiceError):
             invoice_services.add_service_line(
                 self.invoice, self.mc_service, meter=self.meter, serial_number="MC-006",
-                condition_note="fine", previous_km=1, current_km=1, mileage_correction_device=rt809f,
+                condition_note=["fine"], previous_km=1, current_km=1, mileage_correction_device=rt809f,
             )
 
     def test_merged_call_rejected_on_non_editable_invoice(self):
@@ -744,7 +764,7 @@ class MergedAddServiceLineTests(TestCase):
         with self.assertRaises(InvoiceError):
             invoice_services.add_service_line(
                 self.invoice, self.mc_service, meter=self.meter, serial_number="LATE",
-                condition_note="x", previous_km=1, current_km=1,
+                condition_note=["x"], previous_km=1, current_km=1,
             )
 
 
@@ -775,7 +795,7 @@ class MergedAddServiceLineApiTests(TestCase):
                 "service": self.mc_service.id,
                 "meter": self.meter.id,
                 "serial_number": "MC-100",
-                "condition_note": "Casing intact, screen fine",
+                "condition_note": ["Casing intact, screen fine"],
                 "previous_km": 15000,
                 "current_km": 8000,
             },
@@ -797,7 +817,7 @@ class MergedAddServiceLineApiTests(TestCase):
             f"/api/invoices/{self.invoice.id}/service-lines/",
             {
                 "service": self.mc_service.id, "meter": self.meter.id, "serial_number": "MC-101",
-                "condition_note": "fine", "previous_km": 1000, "current_km": 500,
+                "condition_note": ["fine"], "previous_km": 1000, "current_km": 500,
             },
             format="json",
         )
@@ -834,7 +854,7 @@ class EditDeleteLineItemTests(TestCase):
     def test_update_service_line_previous_km_updates_linked_meter_entry(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-1",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         invoice_services.update_service_line(self.invoice, line, previous_km=14500, user=self.admin)
 
@@ -873,7 +893,7 @@ class EditDeleteLineItemTests(TestCase):
     def test_delete_mileage_correction_line_also_removes_meter_entry(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-2",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         entry_id = line.meter_entry_id
         invoice_services.delete_service_line(self.invoice, line, user=self.admin)
@@ -887,7 +907,7 @@ class EditDeleteLineItemTests(TestCase):
     def test_delete_service_line_keeps_meter_entry_if_another_line_still_uses_it(self):
         mc_line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-3",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         entry = mc_line.meter_entry
         other_line = invoice_services.add_service_line(
@@ -989,7 +1009,7 @@ class EditDeleteLineItemApiTests(TestCase):
     def test_patch_service_line_updates_previous_km(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-9",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         response = self.client.patch(
             f"/api/invoices/{self.invoice.id}/service-lines/{line.id}/",
@@ -1001,7 +1021,7 @@ class EditDeleteLineItemApiTests(TestCase):
     def test_delete_service_line_returns_204(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-10",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         response = self.client.delete(f"/api/invoices/{self.invoice.id}/service-lines/{line.id}/")
         self.assertEqual(response.status_code, 204)
@@ -1070,7 +1090,7 @@ class WorkedExampleMergedFlowTests(TestCase):
             f"/api/invoices/{invoice.id}/service-lines/",
             {
                 "service": self.mc_service.id, "meter": self.meter.id, "serial_number": "MC-WORKED-1",
-                "condition_note": "Casing intact, screen fine", "previous_km": 15000, "current_km": 8000,
+                "condition_note": ["Casing intact, screen fine"], "previous_km": 15000, "current_km": 8000,
             },
             format="json",
         )
@@ -1146,7 +1166,7 @@ class NestedMeterStructureTests(TestCase):
     def test_invoice_detail_has_no_top_level_meter_entries_key(self):
         invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-1",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         response = self.client.get(f"/api/invoices/{self.invoice.id}/")
         self.assertEqual(response.status_code, 200)
@@ -1155,7 +1175,7 @@ class NestedMeterStructureTests(TestCase):
     def test_meter_entry_detail_exposes_brand_model_cc(self):
         invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="MC-2",
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         response = self.client.get(f"/api/invoices/{self.invoice.id}/")
         entry = response.data["service_lines"][0]["meter_entry_detail"]
@@ -1165,7 +1185,7 @@ class NestedMeterStructureTests(TestCase):
         self.assertEqual(entry["serial_number"], "MC-2")
         self.assertEqual(entry["previous_km"], 15000)
         self.assertEqual(entry["current_km"], 8000)
-        self.assertEqual(entry["condition_note"], "fine")
+        self.assertEqual(entry["condition_note"], ["fine"])
 
     def test_regular_service_line_has_null_meter_entry_detail(self):
         repair_category = ServiceCategory.objects.create(name=ServiceCategory.Name.METER_REPAIR)
@@ -1193,7 +1213,7 @@ class OptionalSerialNumberTests(TestCase):
     def test_service_line_creates_meter_entry_without_serial_number(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter,
-            condition_note="fine", previous_km=15000, current_km=8000,
+            condition_note=["fine"], previous_km=15000, current_km=8000,
         )
         self.assertIsNone(line.meter_entry.serial_number)
 
@@ -1311,7 +1331,7 @@ class ServiceLineReplaceTests(TestCase):
 
         invoice_services.update_service_line(
             self.invoice, line, service=self.mc_service, meter=self.meter,
-            serial_number="R-1", condition_note="fine", previous_km=1000, current_km=500,
+            serial_number="R-1", condition_note=["fine"], previous_km=1000, current_km=500,
         )
 
         line.refresh_from_db()
@@ -1322,7 +1342,7 @@ class ServiceLineReplaceTests(TestCase):
     def test_replace_mileage_correction_with_regular_service_detaches_and_removes_meter_entry(self):
         line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="R-2",
-            condition_note="fine", previous_km=1000, current_km=500,
+            condition_note=["fine"], previous_km=1000, current_km=500,
         )
         entry_id = line.meter_entry_id
 
@@ -1336,7 +1356,7 @@ class ServiceLineReplaceTests(TestCase):
     def test_replace_mileage_correction_keeps_meter_entry_if_shared_with_another_line(self):
         mc_line = invoice_services.add_service_line(
             self.invoice, self.mc_service, meter=self.meter, serial_number="R-3",
-            condition_note="fine", previous_km=1000, current_km=500,
+            condition_note=["fine"], previous_km=1000, current_km=500,
         )
         entry = mc_line.meter_entry
         other_line = invoice_services.add_service_line(
@@ -1690,3 +1710,157 @@ class PaymentEditDeleteTests(TestCase):
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.paid_amount, Decimal("0.00"))
         self.assertEqual(self.invoice.status, Invoice.Status.UNPAID)
+
+
+class ConditionNoteTagListTests(TestCase):
+    """InvoiceMeterEntry.condition_note: multi-select condition tags
+    (presets and/or free text), optional with a ["Good"] default, stored
+    as a JSON list rather than a single free-text string."""
+
+    def setUp(self):
+        self.customer = Customer.objects.create(name="Karim Motors", phone="01710000070")
+        self.meter = Meter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type=Meter.MemoryType.MCU, ic_mcu_model="R5F10CMEL", sales_price="1500.00",
+        )
+        self.invoice, _ = invoice_services.get_or_create_open_invoice(self.customer)
+
+    def test_multiple_preset_conditions_can_be_selected_together(self):
+        """The scenario from the spec: a meter with more than one problem
+        at once, e.g. a Power IC problem *and* a Display problem."""
+        entry = invoice_services.add_meter_entry(
+            self.invoice, self.meter, serial_number="MCU-070",
+            condition_note=["Power IC Problem", "Display Problem"],
+        )
+        entry.refresh_from_db()
+        self.assertEqual(entry.condition_note, ["Power IC Problem", "Display Problem"])
+
+    def test_custom_tag_can_be_mixed_with_presets(self):
+        entry = invoice_services.add_meter_entry(
+            self.invoice, self.meter, serial_number="MCU-071",
+            condition_note=["Display Problem", "Sticker peeling off the back cover"],
+        )
+        entry.refresh_from_db()
+        self.assertIn("Display Problem", entry.condition_note)  # preset
+        self.assertIn("Sticker peeling off the back cover", entry.condition_note)  # custom
+
+    def test_no_selection_defaults_to_good(self):
+        entry = invoice_services.add_meter_entry(self.invoice, self.meter, serial_number="MCU-072")
+        self.assertEqual(entry.condition_note, ["Good"])
+
+    def test_preset_tags_are_a_suggestion_not_a_restriction(self):
+        """Any string is accepted - CONDITION_TAG_PRESETS is offered to the
+        frontend as a suggested list, never enforced server-side."""
+        entry = invoice_services.add_meter_entry(
+            self.invoice, self.meter, serial_number="MCU-073",
+            condition_note=["Totally made-up condition no one has seen before"],
+        )
+        self.assertEqual(entry.condition_note, ["Totally made-up condition no one has seen before"])
+
+    def test_api_response_shows_multiple_conditions_as_a_list(self):
+        """Same scenario via the real HTTP endpoint, both internal and
+        public views - end to end proof of item 5."""
+        admin = User.objects.create_superuser(email="tags_admin@test.local", password="pass12345", name="Admin")
+        client = APIClient()
+        client.force_authenticate(admin)
+
+        mc_category = ServiceCategory.objects.create(name=ServiceCategory.Name.MILEAGE_CORRECTION)
+        mc_service = Service.objects.create(category=mc_category, name="Mileage Correction", service_price="500.00")
+
+        response = client.post(
+            f"/api/invoices/{self.invoice.id}/service-lines/",
+            {
+                "service": mc_service.id, "meter": self.meter.id, "serial_number": "MCU-074",
+                "condition_note": ["Power IC Problem", "Display Problem"],
+                "previous_km": 15000, "current_km": 8000,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.data["meter_entry_detail"]["condition_note"], ["Power IC Problem", "Display Problem"],
+        )
+
+        internal = client.get(f"/api/invoices/{self.invoice.id}/")
+        internal_entry = internal.data["service_lines"][0]["meter_entry_detail"]
+        self.assertEqual(internal_entry["condition_note"], ["Power IC Problem", "Display Problem"])
+
+        self.invoice.refresh_from_db()
+        public = APIClient().get(f"/api/public/invoices/{self.invoice.public_share_token}/")
+        public_entry = public.data["service_lines"][0]["meter_entry_detail"]
+        self.assertEqual(public_entry["condition_note"], ["Power IC Problem", "Display Problem"])
+
+
+class ConditionNoteDataMigrationTests(TransactionTestCase):
+    """apps.invoices.migrations.0006_condition_note_tag_list's data
+    migration - proves an existing single-string condition_note survives
+    the schema change as a one-item list (not lost, not split apart), and
+    that an old blank note becomes ["Good"], same as a fresh optional entry.
+
+    Runs the real migration against the real database (rolling back to just
+    before 0006, writing old-format rows through the historical model, then
+    migrating forward again) rather than re-testing the conversion logic in
+    isolation - a TransactionTestCase (not TestCase) is required here since
+    MigrationExecutor does its own schema-level transaction management.
+    Restores the schema to the latest migration in tearDown so the rest of
+    the suite sees the normal, fully-migrated state."""
+
+    def setUp(self):
+        # Only "invoices" is rolled back - every other app stays at its
+        # current leaf migration, so the historical model classes for
+        # Customer/Meter below match the real (unrolled-back) DB schema for
+        # those tables, e.g. customers.0002's `description` column.
+        graph = MigrationExecutor(connection).loader.graph
+        other_app_leaves = [node for node in graph.leaf_nodes() if node[0] != "invoices"]
+        self.migrate_from = other_app_leaves + [
+            ("invoices", "0005_invoice_waived_amount_invoice_waived_note_and_more"),
+        ]
+        self.migrate_to = other_app_leaves + [("invoices", "0006_condition_note_tag_list")]
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.migrate_from)
+        self.old_apps = executor.loader.project_state(self.migrate_from).apps
+
+        OldInvoice = self.old_apps.get_model("invoices", "Invoice")
+        OldMeterEntry = self.old_apps.get_model("invoices", "InvoiceMeterEntry")
+        OldCustomer = self.old_apps.get_model("customers", "Customer")
+        OldMeter = self.old_apps.get_model("meters", "Meter")
+
+        old_customer = OldCustomer.objects.create(name="Karim Motors", phone="01710000080", description="")
+        old_meter = OldMeter.objects.create(
+            brand="Bajaj", model="Discover 125", cc=125,
+            memory_type="MCU", ic_mcu_model="R5F10CMEL", sales_price="1500.00", description="",
+        )
+        old_invoice = OldInvoice.objects.create(
+            customer=old_customer, invoice_no="OLD-MIG-0001", public_share_token="oldmigtoken0001",
+        )
+        self.worded_entry_id = OldMeterEntry.objects.create(
+            invoice=old_invoice, meter=old_meter, serial_number="OLD-1",
+            condition_note="Casing intact, screen fine",
+        ).id
+        self.blank_entry_id = OldMeterEntry.objects.create(
+            invoice=old_invoice, meter=old_meter, serial_number="OLD-2", condition_note="",
+        ).id
+
+        # Run the migration under test.
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(self.migrate_to)
+
+    def tearDown(self):
+        # Leave the DB on the latest migration for every other test in the suite.
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+    def test_old_worded_note_becomes_a_single_item_list(self):
+        from apps.invoices.models import InvoiceMeterEntry
+
+        entry = InvoiceMeterEntry.objects.get(pk=self.worded_entry_id)
+        self.assertEqual(entry.condition_note, ["Casing intact, screen fine"])
+
+    def test_old_blank_note_becomes_good(self):
+        from apps.invoices.models import InvoiceMeterEntry
+
+        entry = InvoiceMeterEntry.objects.get(pk=self.blank_entry_id)
+        self.assertEqual(entry.condition_note, ["Good"])

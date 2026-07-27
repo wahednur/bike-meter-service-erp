@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
@@ -62,6 +62,76 @@ class NotificationServiceTests(TestCase):
         created = notification_services.generate_loan_installment_notifications(upcoming_days=45)
         self.assertEqual(len(created), 1)
         self.assertEqual(created[0].type, Notification.Type.LOAN_INSTALLMENT_DUE)
+
+    def test_installment_number_matches_the_due_date_even_with_a_payment_gap(self):
+        """Regression test: installment 3 is paid while 1-2 aren't - the
+        notification must name installment 1 (the actual earliest unpaid
+        one, via loan_services.upcoming_installments()), not "however many
+        payments exist + 1" = 2, which would mismatch the due date it's
+        paired with (installment 1's date, not installment 2's)."""
+        from apps.loans import services as loan_services
+
+        loan = Loan.objects.create(
+            lender_name="Grameen Support NGO", lender_type=Loan.LenderType.NGO,
+            loan_amount=Decimal("30000.00"), interest_amount=Decimal("3000.00"),
+            total_installments=6, installment_amount=Decimal("5500.00"),
+            installment_frequency=Loan.InstallmentFrequency.WEEKLY, start_date=date.today(),
+        )
+        loan_services.add_installment_payment(
+            loan, amount_paid=Decimal("5500.00"), payment_date=date.today(), installment_number=3,
+        )
+
+        created = notification_services.generate_loan_installment_notifications(upcoming_days=45)
+
+        self.assertEqual(len(created), 1)
+        self.assertIn("Installment #1", created[0].title)
+        self.assertNotIn("Installment #2", created[0].title)
+
+    def test_overdue_and_upcoming_installments_on_the_same_loan_both_notify(self):
+        """A loan with installment #1 overdue and unpaid, and installment
+        #4 separately upcoming within the window (installments #2-#3 are
+        paid, so they don't count as "the next one") - both must generate
+        their own notification, not just the more urgent (overdue) one.
+        Re-running the same day must not duplicate either."""
+        from apps.loans import services as loan_services
+
+        loan = Loan.objects.create(
+            lender_name="Pridim Foundation", lender_type=Loan.LenderType.NGO,
+            loan_amount=Decimal("20000.00"), interest_amount=Decimal("2000.00"),
+            total_installments=4, installment_amount=Decimal("5500.00"),
+            installment_frequency=Loan.InstallmentFrequency.WEEKLY,
+            start_date=date.today() - timedelta(days=9),
+        )
+        # weekly from (today - 9 days): #1 due today-2 (overdue), #2 due
+        # today+5, #3 due today+12, #4 due today+19.
+        for installment_number in (2, 3):
+            loan_services.add_installment_payment(
+                loan, amount_paid=Decimal("5500.00"), payment_date=date.today(),
+                installment_number=installment_number,
+            )
+
+        created = notification_services.generate_loan_installment_notifications(upcoming_days=25)
+
+        self.assertEqual(len(created), 2)
+        overdue_notification = next(n for n in created if "#1" in n.title)
+        upcoming_notification = next(n for n in created if "#4" in n.title)
+
+        self.assertEqual(overdue_notification.due_date, date.today() - timedelta(days=2))
+        self.assertIn("#1", overdue_notification.message)
+        self.assertEqual(upcoming_notification.due_date, date.today() + timedelta(days=19))
+        self.assertIn("#4", upcoming_notification.message)
+
+        # Re-running the same day must not create duplicates of either -
+        # the per-(loan, due_date) guard must not let the overdue
+        # notification's existence suppress the separate upcoming one.
+        second_run = notification_services.generate_loan_installment_notifications(upcoming_days=25)
+        self.assertEqual(second_run, [])
+        self.assertEqual(
+            Notification.objects.filter(
+                type=Notification.Type.LOAN_INSTALLMENT_DUE, object_id=str(loan.pk),
+            ).count(),
+            2,
+        )
 
     def test_no_loan_notification_outside_window(self):
         Loan.objects.create(

@@ -331,10 +331,15 @@ function DashboardContent() {
                   key={`${installment.loan_id}-${installment.installment_number}`}
                   className="flex items-center justify-between px-4 py-2.5 text-sm"
                 >
-                  <span>
+                  <span className="flex items-center gap-2">
                     {installment.lender_name} — installment #{installment.installment_number}
+                    {installment.is_overdue && (
+                      <Badge variant="destructive" className="text-xs">
+                        Overdue
+                      </Badge>
+                    )}
                   </span>
-                  <span className="text-muted-foreground">
+                  <span className={installment.is_overdue ? "text-destructive" : "text-muted-foreground"}>
                     ৳{installment.installment_amount} due {installment.due_date}
                   </span>
                 </li>

@@ -73,6 +73,20 @@ class MeterServiceStatsSerializer(serializers.Serializer):
     service_breakdown = MeterServiceBreakdownItemSerializer(many=True)
 
 
+class MeterServiceHistoryEntrySerializer(serializers.Serializer):
+    """One row of compute_meter_service_history() - a single visit."""
+
+    id = serializers.IntegerField()
+    invoice_id = serializers.IntegerField()
+    invoice_no = serializers.CharField()
+    customer_name = serializers.CharField()
+    serial_number = serializers.CharField(allow_null=True)
+    condition_note = serializers.ListField(child=serializers.CharField())
+    previous_km = serializers.IntegerField(allow_null=True)
+    current_km = serializers.IntegerField(allow_null=True)
+    service_date = serializers.DateTimeField()
+
+
 class MileageCorrectionDeviceSerializer(serializers.ModelSerializer):
     """CRUD serializer with per-device job/revenue stats, now computed for
     real from Invoice data - see apps.meters.services.compute_mileage_correction_device_stats().

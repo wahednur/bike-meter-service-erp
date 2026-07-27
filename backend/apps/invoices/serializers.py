@@ -220,7 +220,13 @@ class AddMeterEntryInputSerializer(serializers.Serializer):
 
     meter = serializers.PrimaryKeyRelatedField(queryset=Meter.objects.all())
     serial_number = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True, default="")
-    condition_note = serializers.CharField(required=False, allow_blank=True, default="")
+    # A mix of InvoiceMeterEntry.CONDITION_TAG_PRESETS and/or free-text
+    # entries (e.g. ["Power IC Problem", "Display Problem"]) - not
+    # restricted to the presets. Optional: an empty/omitted list defaults
+    # to ["Good"] at save time (see InvoiceMeterEntry.save()).
+    condition_note = serializers.ListField(
+        child=serializers.CharField(max_length=100, allow_blank=False), required=False, default=list,
+    )
     previous_km = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=None)
     current_km = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=None)
     mileage_correction_device = serializers.PrimaryKeyRelatedField(
@@ -271,7 +277,9 @@ class AddServiceLineInputSerializer(serializers.Serializer):
     serial_number = serializers.CharField(
         max_length=100, required=False, allow_blank=True, allow_null=True, default="",
     )
-    condition_note = serializers.CharField(required=False, allow_blank=True, default="")
+    condition_note = serializers.ListField(
+        child=serializers.CharField(max_length=100, allow_blank=False), required=False, default=list,
+    )
     previous_km = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=None)
     current_km = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=None)
     mileage_correction_device = serializers.PrimaryKeyRelatedField(
@@ -303,7 +311,13 @@ class UpdateServiceLineInputSerializer(serializers.Serializer):
     asset_used = serializers.PrimaryKeyRelatedField(queryset=Asset.objects.all(), required=False, allow_null=True)
     added_date = serializers.DateField(required=False)
     serial_number = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
-    condition_note = serializers.CharField(required=False, allow_blank=True)
+    # Sending [] explicitly clears all tags, which InvoiceMeterEntry.save()
+    # then defaults back to ["Good"] - distinct from omitting the key
+    # entirely (leaves the existing tags untouched), same "not provided" vs
+    # "explicitly cleared" distinction as the other fields on this serializer.
+    condition_note = serializers.ListField(
+        child=serializers.CharField(max_length=100, allow_blank=False), required=False,
+    )
     previous_km = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     current_km = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     mileage_correction_device = serializers.PrimaryKeyRelatedField(

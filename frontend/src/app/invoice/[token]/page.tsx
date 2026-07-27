@@ -4,6 +4,7 @@ import { Printer } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { ConditionNoteBadges } from "@/components/condition-note-badges";
 import { InvoiceStatusBadge } from "@/components/invoice-status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -105,12 +106,15 @@ export default function PublicInvoicePage() {
                       <TableCell className="font-medium">{line.service_name}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {entry ? (
-                          <>
-                            {entry.meter_brand} {entry.meter_model} ({entry.meter_cc}cc)
-                            {entry.previous_km != null && entry.current_km != null && (
-                              <> · {entry.previous_km} → {entry.current_km} km</>
-                            )}
-                          </>
+                          <div className="space-y-1">
+                            <p>
+                              {entry.meter_brand} {entry.meter_model} ({entry.meter_cc}cc)
+                              {entry.previous_km != null && entry.current_km != null && (
+                                <> · {entry.previous_km} → {entry.current_km} km</>
+                              )}
+                            </p>
+                            <ConditionNoteBadges conditions={entry.condition_note} />
+                          </div>
                         ) : (
                           "—"
                         )}

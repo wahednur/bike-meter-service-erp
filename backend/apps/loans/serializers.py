@@ -24,6 +24,13 @@ class LoanSerializer(serializers.ModelSerializer):
     installments_remaining = serializers.SerializerMethodField()
     amount_paid_so_far = serializers.SerializerMethodField()
     amount_remaining = serializers.SerializerMethodField()
+    # The single earliest unpaid installment (see
+    # apps.loans.services.compute_next_installment()) - null once the loan
+    # is fully paid off. next_installment_is_overdue is null right along
+    # with the other two in that case (there's nothing to be overdue on).
+    next_installment_number = serializers.SerializerMethodField()
+    next_installment_due_date = serializers.SerializerMethodField()
+    next_installment_is_overdue = serializers.SerializerMethodField()
 
     class Meta:
         model = Loan
@@ -32,6 +39,7 @@ class LoanSerializer(serializers.ModelSerializer):
             "total_payable", "total_installments", "installment_amount", "installment_frequency",
             "start_date", "installments_paid_count", "installments_remaining",
             "amount_paid_so_far", "amount_remaining",
+            "next_installment_number", "next_installment_due_date", "next_installment_is_overdue",
             "created_at", "updated_at", "created_by",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by"]
@@ -47,3 +55,24 @@ class LoanSerializer(serializers.ModelSerializer):
 
     def get_amount_remaining(self, obj):
         return loan_services.compute_loan_stats(obj)["amount_remaining"]
+
+    def _next_installment(self, obj):
+        # SerializerMethodField calls each getter independently with no
+        # shared cache, so stash the (possibly None) result on the
+        # instance for the run of this one serialization instead of
+        # recomputing the schedule three times per loan.
+        if not hasattr(obj, "_next_installment_cache"):
+            obj._next_installment_cache = loan_services.compute_next_installment(obj)
+        return obj._next_installment_cache
+
+    def get_next_installment_number(self, obj):
+        next_installment = self._next_installment(obj)
+        return next_installment["installment_number"] if next_installment else None
+
+    def get_next_installment_due_date(self, obj):
+        next_installment = self._next_installment(obj)
+        return next_installment["due_date"] if next_installment else None
+
+    def get_next_installment_is_overdue(self, obj):
+        next_installment = self._next_installment(obj)
+        return next_installment["is_overdue"] if next_installment else None

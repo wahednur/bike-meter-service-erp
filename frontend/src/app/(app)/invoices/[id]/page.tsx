@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { AddPaymentDialog } from "@/components/add-payment-dialog";
 import { ApplyDiscountDialog } from "@/components/apply-discount-dialog";
+import { ConditionNoteBadges } from "@/components/condition-note-badges";
 import { DatePickerButton } from "@/components/date-picker-button";
 import { EditPaidInvoiceDialog } from "@/components/edit-paid-invoice-dialog";
 import { EmptyState } from "@/components/empty-state";
@@ -90,7 +91,9 @@ function MeterCell({ entry }: { entry: InvoiceServiceLine["meter_entry_detail"] 
         Serial {entry.serial_number ?? "—"}
         {entry.previous_km != null && entry.current_km != null && ` · ${entry.previous_km} → ${entry.current_km} km`}
       </p>
-      {entry.condition_note && <p className="text-xs text-muted-foreground">{entry.condition_note}</p>}
+      <div className="mt-1">
+        <ConditionNoteBadges conditions={entry.condition_note} />
+      </div>
     </div>
   );
 }

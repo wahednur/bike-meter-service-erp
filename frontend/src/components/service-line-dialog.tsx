@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { toast } from "sonner";
 
 import { Combobox, type ComboboxOption } from "@/components/combobox";
+import { MultiSelect } from "@/components/multi-select";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { addServiceLine, ApiError, updateServiceLine } from "@/lib/api";
-import { cleanInvoiceErrorMessage, compatibleCorrectionDevices } from "@/lib/invoice-utils";
+import { CONDITION_TAG_PRESETS, cleanInvoiceErrorMessage, compatibleCorrectionDevices } from "@/lib/invoice-utils";
 import type {
   Asset,
   InvoiceDetail,
@@ -88,7 +89,7 @@ export function ServiceLineDialog({
   const [serviceId, setServiceId] = useState<number | null>(null);
   const [meterId, setMeterId] = useState<number | null>(null);
   const [serialNumber, setSerialNumber] = useState("");
-  const [conditionNote, setConditionNote] = useState("");
+  const [conditionNote, setConditionNote] = useState<string[]>([]);
   const [previousKm, setPreviousKm] = useState("");
   const [currentKm, setCurrentKm] = useState("");
   const [deviceId, setDeviceId] = useState<number | null>(null);
@@ -127,7 +128,7 @@ export function ServiceLineDialog({
       setServiceId(serviceLine.service);
       setMeterId(entry?.meter ?? null);
       setSerialNumber(entry?.serial_number ?? "");
-      setConditionNote(entry?.condition_note ?? "");
+      setConditionNote(entry?.condition_note ?? ["Good"]);
       setPreviousKm(entry?.previous_km != null ? String(entry.previous_km) : "");
       setCurrentKm(entry?.current_km != null ? String(entry.current_km) : "");
       setDeviceId(entry?.mileage_correction_device ?? null);
@@ -141,7 +142,7 @@ export function ServiceLineDialog({
       setServiceId(null);
       setMeterId(null);
       setSerialNumber("");
-      setConditionNote("");
+      setConditionNote(["Good"]);
       setPreviousKm("");
       setCurrentKm("");
       setDeviceId(null);
@@ -193,10 +194,7 @@ export function ServiceLineDialog({
     description: `${product.sku} · ৳${product.sale_price}`,
   }));
 
-  const isValid =
-    !!serviceId &&
-    price !== "" &&
-    (!isMileageCorrection || (!!meterId && !!conditionNote.trim()));
+  const isValid = !!serviceId && price !== "" && (!isMileageCorrection || !!meterId);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -206,6 +204,14 @@ export function ServiceLineDialog({
     try {
       const priceNumber = price === "" ? null : Number(price);
       const productPriceNumber = productPrice === "" ? null : Number(productPrice);
+      // Clearing every condition tag is a valid way of saying "no
+      // complaints" - send it as an explicit ["Good"] rather than [].
+      // Sending [] would still work for editing an existing entry (the
+      // server defaults an empty selection to ["Good"] on save), but for a
+      // brand new Mileage Correction entry the server requires at least
+      // one tag before it ever gets that far, so send the resolved default
+      // ourselves rather than relying on a path-dependent server rule.
+      const conditionNoteToSend = conditionNote.length > 0 ? conditionNote : ["Good"];
 
       if (isEdit && serviceLine) {
         await updateServiceLine(invoice.id, serviceLine.id, {
@@ -217,7 +223,7 @@ export function ServiceLineDialog({
           ...(isMileageCorrection && {
             ...(allowReplace && !meterLocked && { meter: meterId }),
             serial_number: serialNumber.trim(),
-            condition_note: conditionNote.trim(),
+            condition_note: conditionNoteToSend,
             previous_km: previousKm === "" ? null : Number(previousKm),
             current_km: currentKm === "" ? null : Number(currentKm),
             mileage_correction_device: deviceId,
@@ -235,7 +241,7 @@ export function ServiceLineDialog({
           ...(isMileageCorrection && {
             meter: meterId,
             serial_number: serialNumber.trim(),
-            condition_note: conditionNote.trim(),
+            condition_note: conditionNoteToSend,
             previous_km: previousKm === "" ? null : Number(previousKm),
             current_km: currentKm === "" ? null : Number(currentKm),
             mileage_correction_device: deviceId,
@@ -320,14 +326,18 @@ export function ServiceLineDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="service-line-condition">
-                  Condition note <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="service-line-condition"
+                <Label>Condition note (optional)</Label>
+                <MultiSelect
+                  options={CONDITION_TAG_PRESETS}
                   value={conditionNote}
-                  onChange={(event) => setConditionNote(event.target.value)}
+                  onChange={setConditionNote}
+                  allowCustom
+                  placeholder="Good"
+                  customPlaceholder="Add a custom condition..."
                 />
+                <p className="text-xs text-muted-foreground">
+                  Pick as many as apply, or add your own - defaults to &quot;Good&quot; if left empty.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">

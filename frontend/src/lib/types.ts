@@ -175,6 +175,20 @@ export interface MeterServiceStats {
   service_breakdown: MeterServiceBreakdownItem[];
 }
 
+/** GET /api/meters/{id}/service-history/ - one row per visit (itemized,
+ * unlike the aggregated MeterServiceStats above), newest first. */
+export interface MeterServiceHistoryEntry {
+  id: number;
+  invoice_id: number;
+  invoice_no: string;
+  customer_name: string;
+  serial_number: string | null;
+  condition_note: string[];
+  previous_km: number | null;
+  current_km: number | null;
+  service_date: string;
+}
+
 export interface MileageCorrectionDevice {
   id: number;
   name: string;
@@ -330,7 +344,10 @@ export interface InvoiceMeterEntry {
   meter_cc: number;
   // Optional - a meter entry can be recorded without one.
   serial_number: string | null;
-  condition_note: string;
+  // A mix of CONDITION_TAG_PRESETS (see lib/invoice-utils.ts) and/or
+  // free-text entries, e.g. ["Power IC Problem", "Display Problem"].
+  // Optional - defaults to ["Good"] server-side when nothing is selected.
+  condition_note: string[];
   previous_km: number | null;
   current_km: number | null;
   // Absent entirely on the public invoice view - the shop owner doesn't
@@ -498,7 +515,7 @@ export interface AddServiceLinePayload {
   added_date?: string | null;
   meter?: number | null;
   serial_number?: string;
-  condition_note?: string;
+  condition_note?: string[];
   previous_km?: number | null;
   current_km?: number | null;
   mileage_correction_device?: number | null;
@@ -521,7 +538,7 @@ export interface UpdateServiceLinePayload {
   asset_used?: number | null;
   added_date?: string;
   serial_number?: string;
-  condition_note?: string;
+  condition_note?: string[];
   previous_km?: number | null;
   current_km?: number | null;
   mileage_correction_device?: number | null;
@@ -584,6 +601,11 @@ export interface UpcomingInstallment {
   installment_number: number;
   due_date: string;
   installment_amount: string;
+  // A loan can contribute both an overdue row and a separate upcoming row
+  // at once (e.g. installment 3 is unpaid and overdue while installment 4
+  // is unpaid and due soon) - this distinguishes them rather than one
+  // silently replacing the other.
+  is_overdue: boolean;
 }
 
 export interface TopExpenseCategory {
@@ -879,6 +901,13 @@ export interface Loan {
   installments_remaining: number;
   amount_paid_so_far: string;
   amount_remaining: string;
+  // The single earliest unpaid installment - all three null once the loan
+  // is fully paid off. next_installment_is_overdue distinguishes "due
+  // soon" from "already late" for the same underlying installment (see
+  // apps.loans.services.compute_next_installment() on the backend).
+  next_installment_number: number | null;
+  next_installment_due_date: string | null;
+  next_installment_is_overdue: boolean | null;
   created_at: string;
   updated_at: string;
   created_by: number | null;

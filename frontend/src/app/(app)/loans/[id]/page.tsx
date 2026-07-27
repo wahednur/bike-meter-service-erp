@@ -142,6 +142,29 @@ export default function LoanDetailPage() {
         </CardContent>
       </Card>
 
+      {!isSettled && loan.next_installment_number != null && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Next Installment</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-2">
+                <span className="font-medium">#{loan.next_installment_number}</span>
+                {loan.next_installment_is_overdue && (
+                  <Badge variant="destructive" className="text-xs">
+                    Overdue
+                  </Badge>
+                )}
+              </span>
+              <span className={loan.next_installment_is_overdue ? "text-destructive" : "text-muted-foreground"}>
+                ৳{loan.installment_amount} due {loan.next_installment_due_date}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Progress</CardTitle>

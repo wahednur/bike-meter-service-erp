@@ -154,7 +154,7 @@ def add_meter_entry(
     invoice,
     meter,
     serial_number="",
-    condition_note="",
+    condition_note=None,
     previous_km=None,
     current_km=None,
     mileage_correction_device=None,
@@ -177,7 +177,7 @@ def add_meter_entry(
         invoice=invoice,
         meter=meter,
         serial_number=serial_number or None,
-        condition_note=condition_note,
+        condition_note=condition_note or [],
         previous_km=previous_km,
         current_km=current_km,
         mileage_correction_device=mileage_correction_device,
@@ -226,7 +226,7 @@ def _resolve_meter_entry(
 
 def add_service_line(
     invoice, service, meter_entry=None, price_charged=None, asset_used=None,
-    meter=None, serial_number="", condition_note="", previous_km=None, current_km=None,
+    meter=None, serial_number="", condition_note=None, previous_km=None, current_km=None,
     mileage_correction_device=None, product_used=None, product_price=None, added_date=None, user=None,
 ):
     """Rule (i): the merged "add service" flow.
@@ -245,10 +245,14 @@ def add_service_line(
         rule c) and the InvoiceServiceLine together, in one transaction.
         The frontend never needs to call the standalone meter-entries
         endpoint for this case.
-    Either way, condition_note must be present (the services-app rule)
-    before the line can be saved. previous_km/current_km are optional -
-    some jobs don't have this info available at entry time - but if both
-    are given, previous_km must be >= current_km.
+    condition_note (a list of condition tags, preset and/or custom - see
+    InvoiceMeterEntry.CONDITION_TAG_PRESETS) is required when creating a
+    *new* meter entry inline (the services-app rule); an existing entry
+    passed via `meter_entry` is exempt since it's already gone through
+    InvoiceMeterEntry.save()'s own ["Good"] default and so can never be
+    empty. previous_km/current_km are optional - some jobs don't have this
+    info available at entry time - but if both are given, previous_km must
+    be >= current_km.
 
     Price defaulting: an explicit `price_charged` always wins. Otherwise it
     defaults to the meter's sales_price for a Mileage Correction service,
@@ -392,7 +396,7 @@ def update_service_line(invoice, service_line, user=None, reason=None, **fields)
     if new_service.requires_mileage_correction_fields:
         resolved_entry = _resolve_meter_entry(
             invoice, new_service, meter_entry,
-            fields.get("meter"), fields.get("serial_number", ""), fields.get("condition_note", ""),
+            fields.get("meter"), fields.get("serial_number", ""), fields.get("condition_note", []),
             fields.get("previous_km"), fields.get("current_km"), fields.get("mileage_correction_device"),
             user,
         )
