@@ -12,6 +12,3 @@ PyJWT==2.13.0
 sqlparse==0.5.5
 tzdata==2026.3
 whitenoise==6.11.0
-python manage.py migrate
-python manage.py collectstatic --noinput
-python manage.py makemigration
