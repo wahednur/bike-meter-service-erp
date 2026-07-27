@@ -7,6 +7,7 @@ DEVICES = [
     {"name": "RT809F", "purchase_price": "7500.00", "memory_type_support": "EEPROM"},
     {"name": "UPA USB 1.3", "purchase_price": "7000.00", "memory_type_support": "EEPROM"},
     {"name": "TOP2013", "purchase_price": "15000.00", "memory_type_support": "EEPROM"},
+    {"name": "EasyPro2025", "purchase_price": "3500.00", "memory_type_support": "EEPROM"},
 ]
 
 

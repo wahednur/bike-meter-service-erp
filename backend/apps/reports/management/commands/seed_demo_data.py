@@ -132,6 +132,7 @@ class Command(BaseCommand):
         devices = {
             "VVDI Prog": MileageCorrectionDevice.objects.get(name="VVDI Prog"),
             "RT809F": MileageCorrectionDevice.objects.get(name="RT809F"),
+            "EasyPro2025": MileageCorrectionDevice.objects.get(name="EasyPro2025"),
         }
         return meters, devices
 
