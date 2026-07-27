@@ -8,6 +8,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -30,7 +31,28 @@ SECRET_KEY = env('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env.bool('DEBUG', default=False)
 
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
+
+def _parse_origin_list(raw):
+    """Split a comma-separated env var into clean values.
+
+    django-environ's env.list() does not trim whitespace or trailing
+    slashes around items, so " host.com , other.com/" would silently
+    produce entries that never match a real Host/Origin header and cause
+    every request to 400 with DisallowedHost.
+    """
+    return [item.strip().rstrip('/') for item in raw.split(',') if item.strip()]
+
+
+ALLOWED_HOSTS = _parse_origin_list(env('ALLOWED_HOSTS', default=''))
+
+# Render always exposes the service's own hostname via this var. Include it
+# automatically so the backend never 400s on its own root URL or API routes
+# (including admin login) if it's missing from the manually configured
+# ALLOWED_HOSTS/CSRF_TRUSTED_ORIGINS below — e.g. right after a service
+# rename, before anyone remembers to update the dashboard env vars.
+RENDER_EXTERNAL_HOSTNAME = env('RENDER_EXTERNAL_HOSTNAME', default=None)
+if RENDER_EXTERNAL_HOSTNAME and RENDER_EXTERNAL_HOSTNAME not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
 
 # Application definition
@@ -217,16 +239,61 @@ SIMPLE_JWT = {
 # django-cors-headers
 # https://github.com/adamchainz/django-cors-headers
 
-CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
+CORS_ALLOWED_ORIGINS = _parse_origin_list(env('CORS_ALLOWED_ORIGINS', default=''))
 
 
 # Production hardening
 # Render (and most PaaS hosts) terminate TLS at a proxy and forward plain
-# HTTP internally, so Django needs to trust the forwarded-proto header to
-# know the original request was HTTPS (needed for CSRF/cookie security).
+# HTTP internally, so Django needs to trust the forwarded-proto/host headers
+# to know the original request was HTTPS and what host it targeted (needed
+# for CSRF/cookie security and for the admin's CSRF-trusted-origin check).
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    USE_X_FORWARDED_HOST = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
-CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
+CSRF_TRUSTED_ORIGINS = _parse_origin_list(env('CSRF_TRUSTED_ORIGINS', default=''))
+
+# The Django admin is served BY the backend itself, so its login form posts
+# back to the backend's own origin — CSRF_TRUSTED_ORIGINS must include the
+# backend's own https:// origin, not just the frontend's. Cover that
+# automatically using Render's own hostname var (see ALLOWED_HOSTS above).
+if RENDER_EXTERNAL_HOSTNAME:
+    render_origin = f'https://{RENDER_EXTERNAL_HOSTNAME}'
+    if render_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(render_origin)
+
+
+# Logging
+# https://docs.djangoproject.com/en/6.0/topics/logging/
+#
+# DEBUG stays False in production (never flip this on, even to debug an
+# issue) so error pages never leak tracebacks to clients. Instead, send
+# unhandled exceptions to a console handler at ERROR level for
+# django.request - Django logs every 500 there with exc_info=True, so the
+# full traceback prints to stdout, which Render's log stream captures.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'stream': sys.stdout,
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}
