@@ -21,9 +21,9 @@ import { reportError } from "@/lib/errors";
 import type { Loan, LoanInstallmentPayment } from "@/lib/types";
 
 // Attachments are meant to be a quick receipt photo/scan, not document
-// storage - keep them tiny. Mirrors MAX_ATTACHMENT_SIZE_BYTES in
-// apps.loans.serializers on the backend.
-const MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024;
+// storage. Mirrors MAX_ATTACHMENT_SIZE_BYTES in apps.loans.serializers on
+// the backend - images get compressed under 50KB server-side after upload.
+const MAX_ATTACHMENT_SIZE_BYTES = 300 * 1024;
 
 function todayDateKey(): string {
   const date = new Date();
@@ -186,10 +186,12 @@ export function AddInstallmentPaymentDialog({
                 onChange={handleAttachmentChange}
               />
             )}
-            <p className="text-xs text-muted-foreground">Receipt photo or PDF, under 20KB.</p>
+            <p className="text-xs text-muted-foreground">
+              Receipt photo or PDF, under 300KB. Photos are compressed automatically after upload.
+            </p>
             {attachmentTooLarge && (
               <p className="text-xs text-destructive">
-                {attachment!.name} is {Math.ceil(attachment!.size / 1024)}KB — must be under 20KB.
+                {attachment!.name} is {Math.ceil(attachment!.size / 1024)}KB — must be under 300KB.
               </p>
             )}
           </div>

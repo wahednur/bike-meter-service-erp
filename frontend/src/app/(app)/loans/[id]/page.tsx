@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AddInstallmentPaymentDialog } from "@/components/add-installment-payment-dialog";
 import { EmptyState } from "@/components/empty-state";
+import { InstallmentDetailDialog } from "@/components/installment-detail-dialog";
 import { LoanFormDialog } from "@/components/loan-form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ export default function LoanDetailPage() {
   const [loan, setLoan] = useState<Loan | null>(null);
   const [payments, setPayments] = useState<LoanInstallmentPayment[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<LoanInstallmentPayment | null>(null);
 
   const load = useCallback(() => {
     Promise.all([getLoan(loanId), listLoanInstallmentPayments(loanId)])
@@ -214,7 +216,11 @@ export default function LoanDetailPage() {
                     .slice()
                     .sort((a, b) => a.installment_number - b.installment_number)
                     .map((payment) => (
-                      <TableRow key={payment.id}>
+                      <TableRow
+                        key={payment.id}
+                        onClick={() => setSelectedPayment(payment)}
+                        className="cursor-pointer"
+                      >
                         <TableCell className="font-medium">#{payment.installment_number}</TableCell>
                         <TableCell className="text-muted-foreground">{payment.payment_date}</TableCell>
                         <TableCell className="text-right">৳{payment.amount_paid}</TableCell>
@@ -224,6 +230,7 @@ export default function LoanDetailPage() {
                               href={payment.attachment}
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={(event) => event.stopPropagation()}
                               className="inline-flex items-center gap-1 text-primary hover:underline"
                             >
                               <Paperclip className="h-3.5 w-3.5" /> View
@@ -240,6 +247,13 @@ export default function LoanDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      <InstallmentDetailDialog
+        payment={selectedPayment}
+        onOpenChange={(open) => {
+          if (!open) setSelectedPayment(null);
+        }}
+      />
     </div>
   );
 }

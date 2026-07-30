@@ -1,3 +1,8 @@
+import io
+import os
+
+from django.core.files.uploadedfile import InMemoryUploadedFile
+from PIL import Image
 from rest_framework import serializers
 
 from apps.loans import services as loan_services
@@ -5,9 +10,41 @@ from apps.loans.models import Loan, LoanInstallmentPayment
 
 
 # Attachments are meant to be a quick receipt photo/scan, not document
-# storage - keep them tiny.
-MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024
+# storage. Uploads may arrive up to 300KB, but images are re-encoded down
+# under 50KB before saving so storage stays tiny regardless of what the
+# customer's phone camera produced.
+MAX_ATTACHMENT_SIZE_BYTES = 300 * 1024
+MAX_COMPRESSED_IMAGE_SIZE_BYTES = 50 * 1024
 ALLOWED_ATTACHMENT_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf")
+IMAGE_ATTACHMENT_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def compress_image_attachment(file_obj):
+    """Re-encode an uploaded image as JPEG, stepping quality and then
+    dimensions down until it fits under MAX_COMPRESSED_IMAGE_SIZE_BYTES."""
+    file_obj.seek(0)
+    image = Image.open(file_obj)
+    image = image.convert("RGB")
+
+    buffer = io.BytesIO()
+    quality = 85
+    image.save(buffer, format="JPEG", quality=quality, optimize=True)
+
+    while buffer.tell() > MAX_COMPRESSED_IMAGE_SIZE_BYTES and quality > 10:
+        quality -= 10
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+
+    while buffer.tell() > MAX_COMPRESSED_IMAGE_SIZE_BYTES and min(image.size) > 100:
+        image = image.resize((int(image.width * 0.8), int(image.height * 0.8)))
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+
+    buffer.seek(0)
+    name = os.path.splitext(file_obj.name)[0] + ".jpg"
+    return InMemoryUploadedFile(
+        buffer, None, name, "image/jpeg", buffer.getbuffer().nbytes, None,
+    )
 
 
 class LoanInstallmentPaymentSerializer(serializers.ModelSerializer):
@@ -22,10 +59,13 @@ class LoanInstallmentPaymentSerializer(serializers.ModelSerializer):
     def validate_attachment(self, value):
         if value is None:
             return value
-        if not value.name.lower().endswith(ALLOWED_ATTACHMENT_EXTENSIONS):
+        extension = os.path.splitext(value.name)[1].lower()
+        if extension not in ALLOWED_ATTACHMENT_EXTENSIONS:
             raise serializers.ValidationError("Attachment must be an image (png/jpg/gif/webp) or a PDF.")
         if value.size > MAX_ATTACHMENT_SIZE_BYTES:
-            raise serializers.ValidationError("Attachment must be smaller than 20KB.")
+            raise serializers.ValidationError("Attachment must be smaller than 300KB.")
+        if extension in IMAGE_ATTACHMENT_EXTENSIONS:
+            value = compress_image_attachment(value)
         return value
 
 

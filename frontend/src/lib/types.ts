@@ -941,7 +941,7 @@ export interface AddInstallmentPaymentPayload {
   amount_paid: number;
   payment_date: string;
   installment_number: number;
-  /** Optional receipt photo/PDF - image or pdf, under 20KB (enforced server-side too). */
+  /** Optional receipt photo/PDF - image or pdf, under 300KB (enforced server-side too; images are compressed under 50KB after upload). */
   attachment?: File;
 }
 
