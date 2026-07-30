@@ -44,6 +44,10 @@ class LoanInstallmentPayment(BaseModel):
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
     payment_date = models.DateField()
     installment_number = models.PositiveIntegerField()
+    # Optional proof of payment (receipt photo or PDF) - see
+    # LoanInstallmentPaymentSerializer.validate_attachment() for the
+    # image/pdf + 20KB size restrictions enforced on upload.
+    attachment = models.FileField(upload_to="loan-installment-payments/", null=True, blank=True)
 
     class Meta:
         ordering = ["installment_number"]

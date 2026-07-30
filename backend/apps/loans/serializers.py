@@ -4,14 +4,29 @@ from apps.loans import services as loan_services
 from apps.loans.models import Loan, LoanInstallmentPayment
 
 
+# Attachments are meant to be a quick receipt photo/scan, not document
+# storage - keep them tiny.
+MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024
+ALLOWED_ATTACHMENT_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf")
+
+
 class LoanInstallmentPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = LoanInstallmentPayment
         fields = [
-            "id", "loan", "amount_paid", "payment_date", "installment_number",
+            "id", "loan", "amount_paid", "payment_date", "installment_number", "attachment",
             "created_at", "updated_at", "created_by",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "created_by"]
+
+    def validate_attachment(self, value):
+        if value is None:
+            return value
+        if not value.name.lower().endswith(ALLOWED_ATTACHMENT_EXTENSIONS):
+            raise serializers.ValidationError("Attachment must be an image (png/jpg/gif/webp) or a PDF.")
+        if value.size > MAX_ATTACHMENT_SIZE_BYTES:
+            raise serializers.ValidationError("Attachment must be smaller than 20KB.")
+        return value
 
 
 class LoanSerializer(serializers.ModelSerializer):

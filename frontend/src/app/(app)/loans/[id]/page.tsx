@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Pencil, Receipt } from "lucide-react";
+import { ArrowLeft, Paperclip, Pencil, Receipt } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -206,6 +206,7 @@ export default function LoanDetailPage() {
                     <TableHead>Installment #</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead className="text-right">Amount Paid</TableHead>
+                    <TableHead className="text-right">Attachment</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -217,6 +218,20 @@ export default function LoanDetailPage() {
                         <TableCell className="font-medium">#{payment.installment_number}</TableCell>
                         <TableCell className="text-muted-foreground">{payment.payment_date}</TableCell>
                         <TableCell className="text-right">৳{payment.amount_paid}</TableCell>
+                        <TableCell className="text-right">
+                          {payment.attachment ? (
+                            <a
+                              href={payment.attachment}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-primary hover:underline"
+                            >
+                              <Paperclip className="h-3.5 w-3.5" /> View
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                       </TableRow>
                     ))}
                 </TableBody>

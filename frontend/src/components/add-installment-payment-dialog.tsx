@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Paperclip, X } from "lucide-react";
+import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,11 @@ import { Label } from "@/components/ui/label";
 import { addInstallmentPayment } from "@/lib/api";
 import { reportError } from "@/lib/errors";
 import type { Loan, LoanInstallmentPayment } from "@/lib/types";
+
+// Attachments are meant to be a quick receipt photo/scan, not document
+// storage - keep them tiny. Mirrors MAX_ATTACHMENT_SIZE_BYTES in
+// apps.loans.serializers on the backend.
+const MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024;
 
 function todayDateKey(): string {
   const date = new Date();
@@ -41,6 +47,7 @@ export function AddInstallmentPaymentDialog({
   const [installmentNumber, setInstallmentNumber] = useState(String(suggestedInstallment));
   const [amountPaid, setAmountPaid] = useState(loan.installment_amount);
   const [paymentDate, setPaymentDate] = useState(todayDateKey());
+  const [attachment, setAttachment] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,9 +58,16 @@ export function AddInstallmentPaymentDialog({
     setInstallmentNumber(String(suggestedInstallment));
     setAmountPaid(loan.installment_amount);
     setPaymentDate(todayDateKey());
+    setAttachment(null);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, loan]);
+
+  const attachmentTooLarge = attachment !== null && attachment.size > MAX_ATTACHMENT_SIZE_BYTES;
+
+  function handleAttachmentChange(event: ChangeEvent<HTMLInputElement>) {
+    setAttachment(event.target.files?.[0] ?? null);
+  }
 
   const parsedInstallmentNumber = Number(installmentNumber);
   const parsedAmount = Number(amountPaid);
@@ -63,7 +77,8 @@ export function AddInstallmentPaymentDialog({
     amountPaid !== "" &&
     parsedAmount > 0 &&
     parsedAmount <= amountRemaining &&
-    paymentDate;
+    paymentDate &&
+    !attachmentTooLarge;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -76,6 +91,7 @@ export function AddInstallmentPaymentDialog({
         amount_paid: parsedAmount,
         payment_date: paymentDate,
         installment_number: parsedInstallmentNumber,
+        attachment: attachment ?? undefined,
       });
       toast.success(`Installment #${saved.installment_number} recorded.`);
       setOpen(false);
@@ -145,6 +161,38 @@ export function AddInstallmentPaymentDialog({
           {amountPaid !== "" && parsedAmount > amountRemaining && (
             <p className="text-xs text-destructive">Cannot exceed the remaining balance of ৳{loan.amount_remaining}.</p>
           )}
+          <div className="space-y-2">
+            <Label htmlFor="installment-attachment">Attachment (optional)</Label>
+            {attachment ? (
+              <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                <span className="flex items-center gap-2 truncate">
+                  <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{attachment.name}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAttachment(null)}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  aria-label="Remove attachment"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <Input
+                id="installment-attachment"
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={handleAttachmentChange}
+              />
+            )}
+            <p className="text-xs text-muted-foreground">Receipt photo or PDF, under 20KB.</p>
+            {attachmentTooLarge && (
+              <p className="text-xs text-destructive">
+                {attachment!.name} is {Math.ceil(attachment!.size / 1024)}KB — must be under 20KB.
+              </p>
+            )}
+          </div>
           {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="submit" disabled={!isValid || isSubmitting} className="text-white">

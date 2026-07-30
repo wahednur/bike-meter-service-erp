@@ -930,6 +930,7 @@ export interface LoanInstallmentPayment {
   amount_paid: string;
   payment_date: string;
   installment_number: number;
+  attachment: string | null;
   created_at: string;
   updated_at: string;
   created_by: number | null;
@@ -940,6 +941,8 @@ export interface AddInstallmentPaymentPayload {
   amount_paid: number;
   payment_date: string;
   installment_number: number;
+  /** Optional receipt photo/PDF - image or pdf, under 20KB (enforced server-side too). */
+  attachment?: File;
 }
 
 // --- shop profile ------------------------------------------------------------------

@@ -25,7 +25,7 @@ def compute_loan_stats(loan):
     }
 
 
-def add_installment_payment(loan, amount_paid, payment_date, installment_number, user=None):
+def add_installment_payment(loan, amount_paid, payment_date, installment_number, attachment=None, user=None):
     """Records one installment payment against a loan, after checking it's
     a real installment number for this loan and won't overpay the loan."""
     from apps.loans.models import LoanInstallmentPayment
@@ -48,6 +48,7 @@ def add_installment_payment(loan, amount_paid, payment_date, installment_number,
         amount_paid=amount_paid,
         payment_date=payment_date,
         installment_number=installment_number,
+        attachment=attachment,
         created_by=user,
     )
 

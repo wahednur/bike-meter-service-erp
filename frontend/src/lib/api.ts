@@ -699,7 +699,7 @@ export function listLoanInstallmentPayments(loanId?: number): Promise<LoanInstal
 export function addInstallmentPayment(payload: AddInstallmentPaymentPayload): Promise<LoanInstallmentPayment> {
   return apiFetch<LoanInstallmentPayment>("/loan-installment-payments/", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: toFormData(payload),
   });
 }
 

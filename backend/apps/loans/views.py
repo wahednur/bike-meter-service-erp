@@ -59,6 +59,7 @@ class LoanInstallmentPaymentViewSet(viewsets.ModelViewSet):
                 amount_paid=serializer.validated_data["amount_paid"],
                 payment_date=serializer.validated_data["payment_date"],
                 installment_number=serializer.validated_data["installment_number"],
+                attachment=serializer.validated_data.get("attachment"),
                 user=request.user,
             )
         except LoanError as exc:
