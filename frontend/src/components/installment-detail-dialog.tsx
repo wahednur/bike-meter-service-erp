@@ -2,6 +2,7 @@
 
 import { FileText, Paperclip } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -22,9 +23,11 @@ function isImageAttachment(url: string): boolean {
 export function InstallmentDetailDialog({
   payment,
   onOpenChange,
+  onEdit,
 }: {
   payment: LoanInstallmentPayment | null;
   onOpenChange: (open: boolean) => void;
+  onEdit: (payment: LoanInstallmentPayment) => void;
 }) {
   return (
     <Dialog open={payment !== null} onOpenChange={onOpenChange}>
@@ -80,7 +83,11 @@ export function InstallmentDetailDialog({
                 </p>
               )}
             </div>
-            <DialogFooter showCloseButton />
+            <DialogFooter showCloseButton>
+              <Button type="button" className="text-white" onClick={() => onEdit(payment)}>
+                Edit
+              </Button>
+            </DialogFooter>
           </>
         )}
       </DialogContent>

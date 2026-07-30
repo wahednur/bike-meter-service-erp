@@ -77,6 +77,7 @@ import type {
   TopCustomersReport,
   TopCustomersSortBy,
   SystemUser,
+  UpdateInstallmentPaymentPayload,
   UpdateInvoiceCreatedDatePayload,
   UpdateProductLinePayload,
   UpdateServiceLinePayload,
@@ -699,6 +700,16 @@ export function listLoanInstallmentPayments(loanId?: number): Promise<LoanInstal
 export function addInstallmentPayment(payload: AddInstallmentPaymentPayload): Promise<LoanInstallmentPayment> {
   return apiFetch<LoanInstallmentPayment>("/loan-installment-payments/", {
     method: "POST",
+    body: toFormData(payload),
+  });
+}
+
+export function updateInstallmentPayment(
+  id: number,
+  payload: UpdateInstallmentPaymentPayload,
+): Promise<LoanInstallmentPayment> {
+  return apiFetch<LoanInstallmentPayment>(`/loan-installment-payments/${id}/`, {
+    method: "PATCH",
     body: toFormData(payload),
   });
 }

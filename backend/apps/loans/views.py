@@ -66,5 +66,23 @@ class LoanInstallmentPaymentViewSet(viewsets.ModelViewSet):
             raise ValidationError(str(exc))
         return Response(self.get_serializer(payment).data, status=status.HTTP_201_CREATED)
 
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        try:
+            payment = loan_services.update_installment_payment(
+                instance,
+                amount_paid=validated.get("amount_paid", instance.amount_paid),
+                payment_date=validated.get("payment_date", instance.payment_date),
+                installment_number=validated.get("installment_number", instance.installment_number),
+                attachment=validated.get("attachment", loan_services.ATTACHMENT_UNSET),
+            )
+        except LoanError as exc:
+            raise ValidationError(str(exc))
+        return Response(self.get_serializer(payment).data)
+
     def perform_destroy(self, instance):
         instance.delete()  # soft delete, see BaseModel.delete()

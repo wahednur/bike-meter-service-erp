@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { addInstallmentPayment } from "@/lib/api";
+import { addInstallmentPayment, updateInstallmentPayment } from "@/lib/api";
 import { reportError } from "@/lib/errors";
 import type { Loan, LoanInstallmentPayment } from "@/lib/types";
 
@@ -33,35 +33,52 @@ function todayDateKey(): string {
   return `${year}-${month}-${day}`;
 }
 
-export function AddInstallmentPaymentDialog({
+export function InstallmentPaymentFormDialog({
   loan,
+  payment,
   trigger,
-  onPaid,
+  open: openProp,
+  onOpenChange: onOpenChangeProp,
+  onSaved,
 }: {
   loan: Loan;
-  trigger: ReactNode;
-  onPaid: () => void;
+  /** Pass an existing payment to edit it in place; omit to record a new one. */
+  payment?: LoanInstallmentPayment;
+  trigger?: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onSaved: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const isEdit = !!payment;
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp ?? internalOpen;
+  const setOpen = onOpenChangeProp ?? setInternalOpen;
+
   const suggestedInstallment = Math.min(loan.installments_paid_count + 1, loan.total_installments);
-  const [installmentNumber, setInstallmentNumber] = useState(String(suggestedInstallment));
-  const [amountPaid, setAmountPaid] = useState(loan.installment_amount);
-  const [paymentDate, setPaymentDate] = useState(todayDateKey());
+  const [installmentNumber, setInstallmentNumber] = useState(
+    String(payment?.installment_number ?? suggestedInstallment),
+  );
+  const [amountPaid, setAmountPaid] = useState<number | string>(payment?.amount_paid ?? loan.installment_amount);
+  const [paymentDate, setPaymentDate] = useState(payment?.payment_date ?? todayDateKey());
   const [attachment, setAttachment] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const amountRemaining = Number(loan.amount_remaining);
+  // A payment being edited is already counted in loan.amount_remaining, so
+  // its own current amount has to be added back before checking the new
+  // amount against the budget - otherwise re-saving the same value would
+  // look like an overpayment.
+  const amountRemaining = Number(loan.amount_remaining) + (payment ? Number(payment.amount_paid) : 0);
 
   useEffect(() => {
     if (!open) return;
-    setInstallmentNumber(String(suggestedInstallment));
-    setAmountPaid(loan.installment_amount);
-    setPaymentDate(todayDateKey());
+    setInstallmentNumber(String(payment?.installment_number ?? suggestedInstallment));
+    setAmountPaid(payment?.amount_paid ?? loan.installment_amount);
+    setPaymentDate(payment?.payment_date ?? todayDateKey());
     setAttachment(null);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, loan]);
+  }, [open, loan, payment]);
 
   const attachmentTooLarge = attachment !== null && attachment.size > MAX_ATTACHMENT_SIZE_BYTES;
 
@@ -86,18 +103,29 @@ export function AddInstallmentPaymentDialog({
     setError(null);
     setIsSubmitting(true);
     try {
-      const saved: LoanInstallmentPayment = await addInstallmentPayment({
-        loan: loan.id,
-        amount_paid: parsedAmount,
-        payment_date: paymentDate,
-        installment_number: parsedInstallmentNumber,
-        attachment: attachment ?? undefined,
-      });
-      toast.success(`Installment #${saved.installment_number} recorded.`);
+      const saved: LoanInstallmentPayment = isEdit
+        ? await updateInstallmentPayment(payment.id, {
+            amount_paid: parsedAmount,
+            payment_date: paymentDate,
+            installment_number: parsedInstallmentNumber,
+            attachment: attachment ?? undefined,
+          })
+        : await addInstallmentPayment({
+            loan: loan.id,
+            amount_paid: parsedAmount,
+            payment_date: paymentDate,
+            installment_number: parsedInstallmentNumber,
+            attachment: attachment ?? undefined,
+          });
+      toast.success(
+        isEdit ? `Installment #${saved.installment_number} updated.` : `Installment #${saved.installment_number} recorded.`,
+      );
       setOpen(false);
-      onPaid();
+      onSaved();
     } catch (err) {
-      setError(reportError(err, "Failed to record the installment payment."));
+      setError(
+        reportError(err, isEdit ? "Failed to update the installment payment." : "Failed to record the installment payment."),
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -105,10 +133,10 @@ export function AddInstallmentPaymentDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Record Installment Payment</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit Installment Payment" : "Record Installment Payment"}</DialogTitle>
           <DialogDescription>
             {loan.lender_name} — {loan.installments_remaining} installment(s) remaining, ৳{loan.amount_remaining} left
             to pay.
@@ -159,7 +187,7 @@ export function AddInstallmentPaymentDialog({
             />
           </div>
           {amountPaid !== "" && parsedAmount > amountRemaining && (
-            <p className="text-xs text-destructive">Cannot exceed the remaining balance of ৳{loan.amount_remaining}.</p>
+            <p className="text-xs text-destructive">Cannot exceed the remaining balance of ৳{amountRemaining}.</p>
           )}
           <div className="space-y-2">
             <Label htmlFor="installment-attachment">Attachment (optional)</Label>
@@ -187,7 +215,9 @@ export function AddInstallmentPaymentDialog({
               />
             )}
             <p className="text-xs text-muted-foreground">
-              Receipt photo or PDF, under 300KB. Photos are compressed automatically after upload.
+              {isEdit && payment?.attachment
+                ? "Receipt photo or PDF, under 300KB. Leave empty to keep the current attachment."
+                : "Receipt photo or PDF, under 300KB. Photos are compressed automatically after upload."}
             </p>
             {attachmentTooLarge && (
               <p className="text-xs text-destructive">
@@ -198,7 +228,7 @@ export function AddInstallmentPaymentDialog({
           {error && <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="submit" disabled={!isValid || isSubmitting} className="text-white">
-              {isSubmitting ? "Recording..." : "Record Payment"}
+              {isSubmitting ? "Saving..." : isEdit ? "Save Changes" : "Record Payment"}
             </Button>
           </DialogFooter>
         </form>

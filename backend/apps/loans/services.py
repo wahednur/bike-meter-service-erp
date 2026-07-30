@@ -53,6 +53,45 @@ def add_installment_payment(loan, amount_paid, payment_date, installment_number,
     )
 
 
+# Sentinel distinguishing "attachment not sent in this request" (leave the
+# existing file alone) from "attachment explicitly sent as null/empty"
+# (clear it) - a plain `None` default couldn't tell those apart.
+ATTACHMENT_UNSET = object()
+
+
+def update_installment_payment(
+    payment, amount_paid, payment_date, installment_number, attachment=ATTACHMENT_UNSET,
+):
+    """Applies a correction to an existing installment payment, enforcing
+    the same rules as add_installment_payment() (valid installment number,
+    no overpayment) - except the overpayment check excludes this payment's
+    own current amount from "already paid", since it's being revised in
+    place rather than added on top."""
+    amount_paid = Decimal(amount_paid)
+    if amount_paid <= 0:
+        raise LoanError("amount_paid must be positive.")
+
+    loan = payment.loan
+    if not (1 <= installment_number <= loan.total_installments):
+        raise LoanError(f"installment_number must be between 1 and {loan.total_installments}.")
+
+    stats = compute_loan_stats(loan)
+    amount_remaining_excluding_this_payment = stats["amount_remaining"] + payment.amount_paid
+    if amount_paid > amount_remaining_excluding_this_payment:
+        raise LoanError(
+            f"Payment of {amount_paid} exceeds the remaining balance of "
+            f"{amount_remaining_excluding_this_payment}."
+        )
+
+    payment.amount_paid = amount_paid
+    payment.payment_date = payment_date
+    payment.installment_number = installment_number
+    if attachment is not ATTACHMENT_UNSET:
+        payment.attachment = attachment
+    payment.save()
+    return payment
+
+
 def _add_months(base_date, months):
     """base_date + N calendar months, clamping the day for short months
     (e.g. Jan 31 + 1 month -> Feb 28). No python-dateutil dependency needed

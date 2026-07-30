@@ -5,9 +5,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
-import { AddInstallmentPaymentDialog } from "@/components/add-installment-payment-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { InstallmentDetailDialog } from "@/components/installment-detail-dialog";
+import { InstallmentPaymentFormDialog } from "@/components/installment-payment-form-dialog";
 import { LoanFormDialog } from "@/components/loan-form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ export default function LoanDetailPage() {
   const [payments, setPayments] = useState<LoanInstallmentPayment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedPayment, setSelectedPayment] = useState<LoanInstallmentPayment | null>(null);
+  const [editingPayment, setEditingPayment] = useState<LoanInstallmentPayment | null>(null);
 
   const load = useCallback(() => {
     Promise.all([getLoan(loanId), listLoanInstallmentPayments(loanId)])
@@ -89,14 +90,14 @@ export default function LoanDetailPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             {!isSettled && (
-              <AddInstallmentPaymentDialog
+              <InstallmentPaymentFormDialog
                 loan={loan}
                 trigger={
                   <Button type="button" size="sm" className="text-white">
                     Record Payment
                   </Button>
                 }
-                onPaid={load}
+                onSaved={load}
               />
             )}
             <LoanFormDialog
@@ -252,6 +253,23 @@ export default function LoanDetailPage() {
         payment={selectedPayment}
         onOpenChange={(open) => {
           if (!open) setSelectedPayment(null);
+        }}
+        onEdit={(payment) => {
+          setSelectedPayment(null);
+          setEditingPayment(payment);
+        }}
+      />
+
+      <InstallmentPaymentFormDialog
+        loan={loan}
+        payment={editingPayment ?? undefined}
+        open={editingPayment !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditingPayment(null);
+        }}
+        onSaved={() => {
+          setEditingPayment(null);
+          load();
         }}
       />
     </div>

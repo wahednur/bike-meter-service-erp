@@ -46,7 +46,8 @@ class LoanInstallmentPayment(BaseModel):
     installment_number = models.PositiveIntegerField()
     # Optional proof of payment (receipt photo or PDF) - see
     # LoanInstallmentPaymentSerializer.validate_attachment() for the
-    # image/pdf + 20KB size restrictions enforced on upload.
+    # image/pdf + 300KB upload cap (images are compressed under 50KB
+    # before saving).
     attachment = models.FileField(upload_to="loan-installment-payments/", null=True, blank=True)
 
     class Meta:

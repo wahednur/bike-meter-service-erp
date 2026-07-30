@@ -945,6 +945,14 @@ export interface AddInstallmentPaymentPayload {
   attachment?: File;
 }
 
+export interface UpdateInstallmentPaymentPayload {
+  amount_paid: number;
+  payment_date: string;
+  installment_number: number;
+  /** Optional replacement receipt photo/PDF - omit to leave the existing attachment unchanged. */
+  attachment?: File;
+}
+
 // --- shop profile ------------------------------------------------------------------
 
 export interface ShopProfile {

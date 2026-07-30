@@ -212,6 +212,136 @@ class LoanServiceTests(TestCase):
         self.assertEqual(loan_rows[0]["due_date"], date(2026, 8, 6))
 
 
+class UpdateInstallmentPaymentServiceTests(TestCase):
+    """apps.loans.services.update_installment_payment() - corrects an
+    existing payment in place, enforcing the same rules as
+    add_installment_payment() except the overpayment check must exclude
+    the payment's own current amount (it's being revised, not added on
+    top of what's already recorded)."""
+
+    def setUp(self):
+        self.loan = Loan.objects.create(
+            lender_name="City Bank", lender_type=Loan.LenderType.BANK,
+            loan_amount=Decimal("100000.00"), deposit_amount=Decimal("5000.00"), interest_amount=Decimal("15000.00"),
+            total_installments=12, installment_amount=Decimal("10000.00"),
+            installment_frequency=Loan.InstallmentFrequency.MONTHLY, start_date=date(2026, 1, 1),
+        )
+        self.payment = loan_services.add_installment_payment(
+            self.loan, amount_paid=Decimal("10000.00"), payment_date=date(2026, 2, 1), installment_number=1,
+        )
+
+    def test_corrects_amount_date_and_installment_number(self):
+        loan_services.update_installment_payment(
+            self.payment, amount_paid=Decimal("9500.00"), payment_date=date(2026, 2, 3), installment_number=2,
+        )
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.amount_paid, Decimal("9500.00"))
+        self.assertEqual(self.payment.payment_date, date(2026, 2, 3))
+        self.assertEqual(self.payment.installment_number, 2)
+
+    def test_resaving_the_same_amount_does_not_look_like_an_overpayment(self):
+        """Regression: without excluding the payment's own prior amount
+        from "already paid", re-submitting the same value (or even a
+        larger one that still fits the loan) would be wrongly rejected as
+        exceeding the remaining balance, since the payment is already
+        counted in amount_remaining."""
+        loan_services.update_installment_payment(
+            self.payment, amount_paid=Decimal("10000.00"), payment_date=self.payment.payment_date,
+            installment_number=self.payment.installment_number,
+        )
+        stats = loan_services.compute_loan_stats(self.loan)
+        self.assertEqual(stats["amount_paid_so_far"], Decimal("10000.00"))
+
+    def test_can_raise_amount_up_to_the_true_remaining_balance(self):
+        # With only this one payment recorded, excluding its own 10000 from
+        # "already paid" leaves the full total_payable (120000) available.
+        loan_services.update_installment_payment(
+            self.payment, amount_paid=Decimal("120000.00"), payment_date=self.payment.payment_date,
+            installment_number=self.payment.installment_number,
+        )
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.amount_paid, Decimal("120000.00"))
+
+    def test_rejects_amount_exceeding_true_remaining_balance(self):
+        with self.assertRaises(LoanError):
+            loan_services.update_installment_payment(
+                self.payment, amount_paid=Decimal("120000.01"), payment_date=self.payment.payment_date,
+                installment_number=self.payment.installment_number,
+            )
+
+    def test_rejects_installment_number_out_of_range(self):
+        with self.assertRaises(LoanError):
+            loan_services.update_installment_payment(
+                self.payment, amount_paid=self.payment.amount_paid, payment_date=self.payment.payment_date,
+                installment_number=13,
+            )
+
+    def test_rejects_non_positive_amount(self):
+        with self.assertRaises(LoanError):
+            loan_services.update_installment_payment(
+                self.payment, amount_paid=Decimal("0.00"), payment_date=self.payment.payment_date,
+                installment_number=self.payment.installment_number,
+            )
+
+    def test_attachment_left_alone_when_not_provided(self):
+        loan_services.update_installment_payment(
+            self.payment, amount_paid=Decimal("9000.00"), payment_date=self.payment.payment_date,
+            installment_number=self.payment.installment_number,
+        )
+        self.payment.refresh_from_db()
+        self.assertFalse(self.payment.attachment)
+
+
+class UpdateInstallmentPaymentApiTests(TestCase):
+    """PATCH /api/loan-installment-payments/{id}/ - the endpoint backing
+    the Loan detail page's installment "Edit" action."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(email="loan_edit_admin@test.local", password="pass12345", name="Admin")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+        self.loan = Loan.objects.create(
+            lender_name="City Bank", lender_type=Loan.LenderType.BANK,
+            loan_amount=Decimal("100000.00"), deposit_amount=Decimal("5000.00"), interest_amount=Decimal("15000.00"),
+            total_installments=12, installment_amount=Decimal("10000.00"),
+            installment_frequency=Loan.InstallmentFrequency.MONTHLY, start_date=date(2026, 1, 1),
+        )
+        self.payment = loan_services.add_installment_payment(
+            self.loan, amount_paid=Decimal("10000.00"), payment_date=date(2026, 2, 1), installment_number=1,
+        )
+
+    def test_patch_corrects_amount_paid(self):
+        response = self.client.patch(
+            f"/api/loan-installment-payments/{self.payment.id}/", {"amount_paid": "9500.00"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["amount_paid"], "9500.00")
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.amount_paid, Decimal("9500.00"))
+
+    def test_patch_rejects_overpayment_beyond_true_remaining_balance(self):
+        response = self.client.patch(
+            f"/api/loan-installment-payments/{self.payment.id}/", {"amount_paid": "999999.00"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_patch_rejects_installment_number_out_of_range(self):
+        response = self.client.patch(
+            f"/api/loan-installment-payments/{self.payment.id}/", {"installment_number": 99},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_patch_without_amount_paid_leaves_it_unchanged(self):
+        response = self.client.patch(
+            f"/api/loan-installment-payments/{self.payment.id}/", {"payment_date": "2026-02-05"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.amount_paid, Decimal("10000.00"))
+        self.assertEqual(self.payment.payment_date, date(2026, 2, 5))
+
+
 class OverdueVsUpcomingInstallmentTests(TestCase):
     """Regression coverage for the "Upcoming Loan Installments" bug report:
     a weekly loan (Pridim Foundation) starting 2026-07-02 has installments
