@@ -246,8 +246,15 @@ CORS_ALLOWED_ORIGINS = _parse_origin_list(env('CORS_ALLOWED_ORIGINS', default=''
 # Render (and most PaaS hosts) terminate TLS at a proxy and forward plain
 # HTTP internally, so Django needs to trust the forwarded-proto/host headers
 # to know the original request was HTTPS and what host it targeted (needed
-# for CSRF/cookie security and for the admin's CSRF-trusted-origin check).
-if not DEBUG:
+# for CSRF/cookie security, the admin's CSRF-trusted-origin check, AND for
+# request.build_absolute_uri() - used to build every FileField/ImageField
+# URL, e.g. installment attachments - to return an https:// URL instead of
+# http://. Gating this on DEBUG (rather than "are we actually behind
+# Render's proxy") meant that whenever DEBUG got left on in the deployed
+# environment, every uploaded file's URL came back as http:// on an https
+# page and silently failed to load as blocked mixed content - nothing to
+# do with DEBUG at all, so it must key off actually running on Render.
+if RENDER_EXTERNAL_HOSTNAME:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     USE_X_FORWARDED_HOST = True
     SESSION_COOKIE_SECURE = True
