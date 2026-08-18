@@ -113,7 +113,8 @@ export default function PublicInvoicePage() {
                                 <> · {entry.previous_km} → {entry.current_km} km</>
                               )}
                             </p>
-                            <ConditionNoteBadges conditions={entry.condition_note} />
+                            {/* <ConditionNoteBadges conditions={entry.condition_note} /> */}
+                            <p>Date: {new Date(entry.service_date).toLocaleDateString("en-GB")} </p>
                           </div>
                         ) : (
                           "—"
