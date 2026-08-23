@@ -695,7 +695,7 @@ def admin_dashboard_summary(low_stock_threshold=None):
 
     from apps.customers.models import Customer
     from apps.expenses.models import Expense
-    from apps.invoices.models import Invoice
+    from apps.invoices.models import Invoice, InvoiceMeterEntry
     from apps.loans import services as loan_services
     from apps.products import services as product_services
 
@@ -718,6 +718,32 @@ def admin_dashboard_summary(low_stock_threshold=None):
     today_invoice_count = today_invoices.count()
     today_total_amount = today_invoices.aggregate(total=Sum("total_amount"))["total"] or Decimal("0")
     total_income_all_time = Invoice.objects.aggregate(total=Sum("paid_amount"))["total"] or Decimal("0")
+
+    # Days since the shop's very first invoice (by created_date, the
+    # business visit date - not created_at, the audit timestamp). No
+    # invoices yet -> no meaningful average, so daily_average_income is 0.
+    first_invoice = Invoice.objects.order_by("created_date").first()
+    if first_invoice:
+        days_since_first_invoice = max((today - first_invoice.created_date).days, 1)
+        daily_average_income = (total_income_all_time / days_since_first_invoice).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP,
+        )
+    else:
+        daily_average_income = Decimal("0")
+
+    total_customers = Customer.objects.count()
+
+    # A customer counts as "repeated" once they have more than one
+    # non-cancelled-out (soft-delete-aware) invoice - grouped from
+    # Invoice.objects rather than Customer.objects.annotate(Count("invoices"))
+    # since the latter joins straight to the table and would count
+    # soft-deleted invoices too.
+    repeated_customers_count = (
+        Invoice.objects.values("customer_id")
+        .annotate(invoice_count=Count("id"))
+        .filter(invoice_count__gt=1)
+        .count()
+    )
 
     red_listed_customers_count = Customer.objects.filter(is_red_listed=True).count()
 
@@ -748,6 +774,16 @@ def admin_dashboard_summary(low_stock_threshold=None):
         or Decimal("0")
     )
     total_expense_all_time = Expense.objects.aggregate(total=Sum("amount"))["total"] or Decimal("0")
+
+    this_month_invoices = Invoice.objects.filter(created_date__year=today.year, created_date__month=today.month)
+    this_month_invoice_count = this_month_invoices.count()
+    this_month_work_value = this_month_invoices.aggregate(total=Sum("total_amount"))["total"] or Decimal("0")
+    # Filtered on the meter entry's own created_at, not the parent invoice's
+    # created_date - same reasoning as sales_report/service_performance_report:
+    # an invoice can stay open and gain meter entries across many visits.
+    this_month_meter_count = InvoiceMeterEntry.objects.filter(
+        created_at__year=today.year, created_at__month=today.month,
+    ).count()
 
     top_category_row = (
         Expense.objects.filter(date__gte=month_start, date__lte=today)
@@ -782,6 +818,12 @@ def admin_dashboard_summary(low_stock_threshold=None):
         "today_invoice_count": today_invoice_count,
         "today_total_amount": today_total_amount,
         "total_income_all_time": total_income_all_time,
+        "daily_average_income": daily_average_income,
+        "total_customers": total_customers,
+        "repeated_customers_count": repeated_customers_count,
+        "this_month_invoice_count": this_month_invoice_count,
+        "this_month_meter_count": this_month_meter_count,
+        "this_month_work_value": this_month_work_value,
         "pending_dues": {"invoice_count": due_data["invoice_count"], "total_due": due_data["total_due"]},
         "red_listed_customers_count": red_listed_customers_count,
         "low_stock_products": low_stock_rows,
@@ -799,3 +841,34 @@ def admin_dashboard_summary(low_stock_threshold=None):
         "income_prediction_gap": income_prediction_gap,
         "is_early_month_estimate": is_early_month_estimate,
     }
+
+
+# --- Repeated Customers Report --------------------------------------------------
+
+def repeated_customers_report():
+    """Every customer with more than one invoice - name, phone, invoice
+    count, total billed amount. Grouped from Invoice.objects (not
+    Customer.objects.annotate(Count("invoices")), which joins straight to
+    the table and would count soft-deleted invoices too). No date range:
+    this is about a customer's whole relationship with the shop, not a
+    window of it."""
+    from apps.invoices.models import Invoice
+
+    grouped = (
+        Invoice.objects.values("customer_id", "customer__name", "customer__phone")
+        .annotate(invoice_count=Count("id"), total_billed_amount=Sum("total_amount"))
+        .filter(invoice_count__gt=1)
+        .order_by("-invoice_count")
+    )
+
+    rows = [
+        {
+            "customer_id": row["customer_id"],
+            "customer_name": row["customer__name"],
+            "phone": row["customer__phone"],
+            "invoice_count": row["invoice_count"],
+            "total_billed_amount": row["total_billed_amount"] or Decimal("0"),
+        }
+        for row in grouped
+    ]
+    return {"rows": rows, "customer_count": len(rows)}

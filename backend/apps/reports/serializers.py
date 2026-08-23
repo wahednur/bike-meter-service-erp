@@ -222,6 +222,12 @@ class AdminDashboardSummarySerializer(serializers.Serializer):
     today_invoice_count = serializers.IntegerField()
     today_total_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     total_income_all_time = serializers.DecimalField(max_digits=14, decimal_places=2)
+    daily_average_income = serializers.DecimalField(max_digits=14, decimal_places=2)
+    total_customers = serializers.IntegerField()
+    repeated_customers_count = serializers.IntegerField()
+    this_month_invoice_count = serializers.IntegerField()
+    this_month_meter_count = serializers.IntegerField()
+    this_month_work_value = serializers.DecimalField(max_digits=14, decimal_places=2)
     pending_dues = PendingDuesSerializer()
     red_listed_customers_count = serializers.IntegerField()
     low_stock_products = LowStockProductSerializer(many=True)
@@ -238,3 +244,16 @@ class AdminDashboardSummarySerializer(serializers.Serializer):
     predicted_month_income = serializers.DecimalField(max_digits=14, decimal_places=2)
     income_prediction_gap = serializers.DecimalField(max_digits=14, decimal_places=2)
     is_early_month_estimate = serializers.BooleanField()
+
+
+class RepeatedCustomerRowSerializer(serializers.Serializer):
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    phone = serializers.CharField()
+    invoice_count = serializers.IntegerField()
+    total_billed_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class RepeatedCustomersReportSerializer(serializers.Serializer):
+    rows = RepeatedCustomerRowSerializer(many=True)
+    customer_count = serializers.IntegerField()

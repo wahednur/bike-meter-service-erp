@@ -58,6 +58,7 @@ import type {
   PublicInvoiceDetail,
   Purchase,
   PurchaseReport,
+  RepeatedCustomersReport,
   ReportDateRange,
   ReportPeriod,
   RestockPayload,
@@ -279,6 +280,10 @@ export function getTopCustomersReport(
   if (range.toDate) query.set("to_date", range.toDate);
   query.set("sort_by", sortBy);
   return apiFetch<TopCustomersReport>(`/reports/top-customers/?${query.toString()}`);
+}
+
+export function getRepeatedCustomersReport(): Promise<RepeatedCustomersReport> {
+  return apiFetch<RepeatedCustomersReport>("/reports/repeated-customers/");
 }
 
 export function getPaymentDelayReport(range: ReportDateRange = {}): Promise<PaymentDelayReport> {

@@ -620,6 +620,12 @@ export interface AdminDashboardSummary {
   today_invoice_count: number;
   today_total_amount: string;
   total_income_all_time: string;
+  daily_average_income: string;
+  total_customers: number;
+  repeated_customers_count: number;
+  this_month_invoice_count: number;
+  this_month_meter_count: number;
+  this_month_work_value: string;
   pending_dues: PendingDues;
   red_listed_customers_count: number;
   low_stock_products: LowStockProduct[];
@@ -788,6 +794,19 @@ export interface TopCustomersReport {
   rows: TopCustomerRow[];
   customer_count: number;
   sort_by: TopCustomersSortBy;
+}
+
+export interface RepeatedCustomerRow {
+  customer_id: number;
+  customer_name: string;
+  phone: string;
+  invoice_count: number;
+  total_billed_amount: string;
+}
+
+export interface RepeatedCustomersReport {
+  rows: RepeatedCustomerRow[];
+  customer_count: number;
 }
 
 export interface PaymentDelayRow {

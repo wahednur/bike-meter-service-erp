@@ -6,16 +6,22 @@ import {
   CalendarClock,
   CalendarDays,
   CalendarRange,
+  ClipboardList,
+  Coins,
   FileText,
+  Gauge,
   Hourglass,
+  LineChart,
   PackageX,
   PiggyBank,
   Receipt,
+  Repeat,
   Tags,
   Target,
   TrendingDown,
   TrendingUp,
   UserX,
+  Users,
   Wallet,
   Wrench,
   type LucideIcon,
@@ -25,11 +31,13 @@ import { toast } from "sonner";
 
 import { EmptyState } from "@/components/empty-state";
 import { IncomeTrendChart } from "@/components/income-trend-chart";
+import { RepeatedCustomersDialog } from "@/components/repeated-customers-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, getAdminDashboard } from "@/lib/api";
 import type { AdminDashboardSummary } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 // Cycled across --chart-1..5 - with 8 stat cards and only 5 theme accent
 // colors, a couple of cards repeat a color, but no two adjacent cards share
@@ -60,17 +68,37 @@ function StatCard({
   hint,
   icon: Icon,
   accentIndex,
+  onClick,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon: LucideIcon;
   accentIndex: number;
+  /** When set, the card becomes clickable (e.g. to open a detail dialog) -
+   * styled with a hover affordance and reachable via keyboard. */
+  onClick?: () => void;
 }) {
   const color = accentColor(accentIndex);
 
   return (
-    <Card className="border-l-4" style={{ borderLeftColor: color }}>
+    <Card
+      className={cn("border-l-4", onClick && "cursor-pointer transition-shadow hover:shadow-md")}
+      style={{ borderLeftColor: color }}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+    >
       <CardContent className="flex items-start gap-3">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
@@ -119,6 +147,7 @@ function DashboardContent() {
   const [data, setData] = useState<AdminDashboardSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showRepeatedCustomers, setShowRepeatedCustomers] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -241,8 +270,44 @@ function DashboardContent() {
             icon={PiggyBank}
             accentIndex={0}
           />
+          <StatCard
+            label="Daily Average Income"
+            value={`৳${data.daily_average_income}`}
+            hint="all-time average per day"
+            icon={LineChart}
+            accentIndex={1}
+          />
+          <StatCard label="Total Customers" value={String(data.total_customers)} icon={Users} accentIndex={2} />
+          <StatCard
+            label="Repeated Customers"
+            value={String(data.repeated_customers_count)}
+            hint="click to view list"
+            icon={Repeat}
+            accentIndex={3}
+            onClick={() => setShowRepeatedCustomers(true)}
+          />
+          <StatCard
+            label="This Month's Invoice Count"
+            value={String(data.this_month_invoice_count)}
+            icon={ClipboardList}
+            accentIndex={4}
+          />
+          <StatCard
+            label="This Month's Meter Count"
+            value={String(data.this_month_meter_count)}
+            icon={Gauge}
+            accentIndex={0}
+          />
+          <StatCard
+            label="This Month's Work Value"
+            value={`৳${data.this_month_work_value}`}
+            icon={Coins}
+            accentIndex={1}
+          />
         </div>
       </section>
+
+      <RepeatedCustomersDialog open={showRepeatedCustomers} onOpenChange={setShowRepeatedCustomers} />
 
       <section>
         <h2 className="mb-2 text-sm font-semibold">Expenses</h2>

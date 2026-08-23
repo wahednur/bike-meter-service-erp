@@ -19,6 +19,7 @@ from apps.reports.serializers import (
     PaymentDelayReportSerializer,
     ProfitLossReportSerializer,
     PurchaseReportSerializer,
+    RepeatedCustomersReportSerializer,
     SalesReportSerializer,
     ServicePerformanceReportSerializer,
     StockReportSerializer,
@@ -164,6 +165,16 @@ class DashboardSummaryView(BaseReportView):
         from_date, to_date = get_date_range(request)
         data = report_services.dashboard_summary(from_date, to_date)
         return Response(DashboardSummarySerializer(data).data)
+
+
+class RepeatedCustomersReportView(BaseReportView):
+    """Customers with more than one invoice - name, phone, invoice count,
+    total billed amount. No date range: this is a customer's whole
+    relationship with the shop, not a window of it."""
+
+    def get(self, request):
+        data = report_services.repeated_customers_report()
+        return Response(RepeatedCustomersReportSerializer(data).data)
 
 
 class AdminDashboardView(BaseReportView):
