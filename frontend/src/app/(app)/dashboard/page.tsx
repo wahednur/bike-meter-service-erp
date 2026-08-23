@@ -173,7 +173,8 @@ function DashboardContent() {
       isMounted = false;
     };
   }, []);
-
+console.log("Data", data)
+console.log("Data Daily", data?.daily_average_income)
   if (isLoading) return <DashboardSkeleton />;
   if (error) {
     return <p className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</p>;

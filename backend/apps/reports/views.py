@@ -189,4 +189,5 @@ class AdminDashboardView(BaseReportView):
         data = report_services.admin_dashboard_summary(
             low_stock_threshold=int(low_stock_threshold) if low_stock_threshold else None,
         )
+        
         return Response(AdminDashboardSummarySerializer(data).data)
