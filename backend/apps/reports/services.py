@@ -784,6 +784,11 @@ def admin_dashboard_summary(low_stock_threshold=None):
     this_month_meter_count = InvoiceMeterEntry.objects.filter(
         created_at__year=today.year, created_at__month=today.month,
     ).count()
+    average_per_invoice = (
+        (this_month_work_value / this_month_invoice_count).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if this_month_invoice_count
+        else Decimal("0")
+    )
 
     top_category_row = (
         Expense.objects.filter(date__gte=month_start, date__lte=today)
@@ -824,6 +829,7 @@ def admin_dashboard_summary(low_stock_threshold=None):
         "this_month_invoice_count": this_month_invoice_count,
         "this_month_meter_count": this_month_meter_count,
         "this_month_work_value": this_month_work_value,
+        "average_per_invoice": average_per_invoice,
         "pending_dues": {"invoice_count": due_data["invoice_count"], "total_due": due_data["total_due"]},
         "red_listed_customers_count": red_listed_customers_count,
         "low_stock_products": low_stock_rows,

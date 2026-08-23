@@ -8,6 +8,7 @@ import {
   CalendarRange,
   ClipboardList,
   Coins,
+  Divide,
   FileText,
   Gauge,
   Hourglass,
@@ -278,6 +279,9 @@ console.log("Data Daily", data?.daily_average_income)
             icon={LineChart}
             accentIndex={1}
           />
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           <StatCard label="Total Customers" value={String(data.total_customers)} icon={Users} accentIndex={2} />
           <StatCard
             label="Repeated Customers"
@@ -304,6 +308,13 @@ console.log("Data Daily", data?.daily_average_income)
             value={`৳${data.this_month_work_value}`}
             icon={Coins}
             accentIndex={1}
+          />
+          <StatCard
+            label="Average Per Invoice"
+            value={`৳${data.average_per_invoice}`}
+            hint="this month's work value / invoice count"
+            icon={Divide}
+            accentIndex={2}
           />
         </div>
       </section>

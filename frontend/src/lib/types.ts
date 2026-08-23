@@ -626,6 +626,7 @@ export interface AdminDashboardSummary {
   this_month_invoice_count: number;
   this_month_meter_count: number;
   this_month_work_value: string;
+  average_per_invoice: string;
   pending_dues: PendingDues;
   red_listed_customers_count: number;
   low_stock_products: LowStockProduct[];

@@ -228,6 +228,7 @@ class AdminDashboardSummarySerializer(serializers.Serializer):
     this_month_invoice_count = serializers.IntegerField()
     this_month_meter_count = serializers.IntegerField()
     this_month_work_value = serializers.DecimalField(max_digits=14, decimal_places=2)
+    average_per_invoice = serializers.DecimalField(max_digits=14, decimal_places=2)
     pending_dues = PendingDuesSerializer()
     red_listed_customers_count = serializers.IntegerField()
     low_stock_products = LowStockProductSerializer(many=True)
