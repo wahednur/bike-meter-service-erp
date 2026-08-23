@@ -174,8 +174,7 @@ function DashboardContent() {
       isMounted = false;
     };
   }, []);
-console.log("Data", data)
-console.log("Data Daily", data?.daily_average_income)
+
   if (isLoading) return <DashboardSkeleton />;
   if (error) {
     return <p className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</p>;
@@ -280,8 +279,9 @@ console.log("Data Daily", data?.daily_average_income)
             accentIndex={1}
           />
         </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        <section className="mt-6">
+          <h2 className="mb-2 text-sm font-semibold">Overview Summary</h2>
+           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           <StatCard label="Total Customers" value={String(data.total_customers)} icon={Users} accentIndex={2} />
           <StatCard
             label="Repeated Customers"
@@ -317,6 +317,8 @@ console.log("Data Daily", data?.daily_average_income)
             accentIndex={2}
           />
         </div>
+        </section>
+       
       </section>
 
       <RepeatedCustomersDialog open={showRepeatedCustomers} onOpenChange={setShowRepeatedCustomers} />
