@@ -89,22 +89,22 @@ export default function PublicInvoicePage() {
 
       {invoice.service_lines.length > 0 && (
         <Section title="Services">
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Service</TableHead>
-                  <TableHead>Meter</TableHead>
-                  <TableHead className="text-right">Price</TableHead>
+          <div className="rounded-lg border max-w-2xl">
+            <Table className="max-full flex flex-col">
+              <TableHeader className="w-full">
+                <TableRow className="w-full flex justify-between">
+                  <TableHead className="w-3/12" >Service</TableHead>
+                  <TableHead className="flex-1">Meter</TableHead>
+                  <TableHead className="w-2/12 text-right">Price</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody className="flex flex-col w-full">
                 {invoice.service_lines.map((line) => {
                   const entry = line.meter_entry_detail;
                   return (
-                    <TableRow key={line.id}>
-                      <TableCell className="font-medium">{line.service_name}</TableCell>
-                      <TableCell className="text-muted-foreground">
+                    <TableRow key={line.id} className="max-w-2xl">
+                      <TableCell className="w-2/12 font-medium">{line.service_name}</TableCell>
+                      <TableCell className="flex-1 text-muted-foreground">
                         {entry ? (
                           <div className="space-y-1">
                             <p>
@@ -120,7 +120,7 @@ export default function PublicInvoicePage() {
                           "—"
                         )}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="w-2/12 text-right">
                         ৳{line.line_total}
                         {Number(line.product_price) > 0 && (
                           <p className="text-xs text-muted-foreground">
@@ -181,7 +181,7 @@ export default function PublicInvoicePage() {
                     <TableCell className="text-muted-foreground">
                       {new Date(payment.payment_date).toLocaleDateString()}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{payment.payment_method}</TableCell>
+                    <TableCell className="text-muted-foreground">{payment.payment_method} - <p>Note: {payment.note}</p> </TableCell>
                     <TableCell className="text-right">৳{payment.amount}</TableCell>
                   </TableRow>
                 ))}
