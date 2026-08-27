@@ -332,7 +332,7 @@ export function ServiceLineDialog({
                   value={conditionNote}
                   onChange={setConditionNote}
                   allowCustom
-                  placeholder="Good"
+                  placeholder="N/A"
                   customPlaceholder="Add a custom condition..."
                 />
                 <p className="text-xs text-muted-foreground">

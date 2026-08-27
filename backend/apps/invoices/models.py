@@ -138,7 +138,7 @@ class InvoiceMeterEntry(BaseModel):
 
     def save(self, *args, **kwargs):
         if not self.condition_note:
-            self.condition_note = ["Good"]
+            self.condition_note = [" "]
         super().save(*args, **kwargs)
 
 
