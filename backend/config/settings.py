@@ -125,6 +125,11 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASE_URL = env('DATABASE_URL', default=None)
+# Managed databases such as Neon generally require TLS, whereas a PostgreSQL
+# service on Dokploy's private Docker network normally does not. Keep the
+# secure production default, but allow the private-network case to opt out
+# without enabling DEBUG.
+DATABASE_SSL_REQUIRE = env.bool('DATABASE_SSL_REQUIRE', default=not DEBUG)
 
 if DATABASE_URL:
     # Production / hosted Postgres (Neon, Supabase, Render, etc.) — a single
@@ -133,7 +138,7 @@ if DATABASE_URL:
         'default': dj_database_url.parse(
             DATABASE_URL,
             conn_max_age=600,
-            ssl_require=not DEBUG,
+            ssl_require=DATABASE_SSL_REQUIRE,
         )
     }
 else:

@@ -31,6 +31,7 @@ Set these in the Dokploy application, never in the Dockerfile or repository:
 DEBUG=False
 SECRET_KEY=<a-long-random-secret>
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
+DATABASE_SSL_REQUIRE=False
 ALLOWED_HOSTS=api.example.com
 CORS_ALLOWED_ORIGINS=https://app.example.com
 CSRF_TRUSTED_ORIGINS=https://api.example.com,https://app.example.com
@@ -43,8 +44,9 @@ values are full origins and must use `https://`. Use comma-separated values
 when more than one frontend domain is allowed.
 
 For a database deployed through Dokploy, use that database service's internal
-Postgres connection URL. For Neon or another managed database, use its TLS
-connection URL as `DATABASE_URL`.
+Postgres connection URL and set `DATABASE_SSL_REQUIRE=False`: the internal
+Postgres service does not provide TLS. For Neon or another managed database,
+use its TLS connection URL and set `DATABASE_SSL_REQUIRE=True`.
 
 ## First deployment
 
