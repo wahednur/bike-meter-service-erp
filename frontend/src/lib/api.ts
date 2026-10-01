@@ -84,7 +84,20 @@ import type {
   UpdateServiceLinePayload,
 } from "./types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api";
+declare global {
+  interface Window {
+    __APP_CONFIG__?: {
+      apiBaseUrl?: string;
+    };
+  }
+}
+
+// API_BASE_URL is generated at container startup by docker-entrypoint.sh.
+// This lets Dokploy supply it as a normal runtime environment variable.
+const API_BASE_URL =
+  (typeof window !== "undefined" ? window.__APP_CONFIG__?.apiBaseUrl : undefined) ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  "http://localhost:8000/api";
 
 export class ApiError extends Error {
   status: number;

@@ -11,22 +11,22 @@ This is separate from the Django backend application.
 - **Health check path:** `/api/health/`
 - Attach the frontend domain, for example `meter.example.com`.
 
-## Required build argument
+## Required environment variable
 
-Set this in Dokploy's **Build Arguments** before deploying:
+Set this in Dokploy's normal **Environment Variables** section:
 
 ```dotenv
-NEXT_PUBLIC_API_BASE_URL=https://mapi.example.com/api
+API_BASE_URL=https://mapi.example.com/api
 ```
 
 For this project, use:
 
 ```dotenv
-NEXT_PUBLIC_API_BASE_URL=https://mapi.wahednur.tech/api
+API_BASE_URL=https://mapi.wahednur.tech/api
 ```
 
-This is a build argument because `NEXT_PUBLIC_*` values are compiled into the
-JavaScript sent to browsers. Changing it requires a new frontend deployment.
+The container generates its browser runtime configuration at startup, so this
+works on Dokploy versions that do not offer a Build Arguments section.
 
 ## Backend CORS setting
 
