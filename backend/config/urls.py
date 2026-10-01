@@ -18,10 +18,12 @@ import re
 
 from django.conf import settings
 from django.contrib import admin
+from django.http import HttpResponse
 from django.urls import include, path, re_path
 from django.views.static import serve as serve_static
 
 urlpatterns = [
+    path('healthz/', lambda request: HttpResponse('ok', content_type='text/plain')),
     path('admin/', admin.site.urls),
     path('api/', include('apps.accounts.urls')),
     path('api/', include('apps.audit.urls')),

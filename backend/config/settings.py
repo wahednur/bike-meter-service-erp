@@ -254,7 +254,7 @@ CORS_ALLOWED_ORIGINS = _parse_origin_list(env('CORS_ALLOWED_ORIGINS', default=''
 # environment, every uploaded file's URL came back as http:// on an https
 # page and silently failed to load as blocked mixed content - nothing to
 # do with DEBUG at all, so it must key off actually running on Render.
-if RENDER_EXTERNAL_HOSTNAME:
+if RENDER_EXTERNAL_HOSTNAME or env.bool('TRUST_X_FORWARDED_HEADERS', default=False):
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     USE_X_FORWARDED_HOST = True
     SESSION_COOKIE_SECURE = True
